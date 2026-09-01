@@ -1,0 +1,10 @@
+runConfig:
+  minInstances: 0
+  maxInstances: 2
+  concurrency: 80
+  cpu: 1
+  memoryMiB: 512
+
+env:
+  - variable: WATCHMODE_API_KEY
+    secret: WATCHMODE_API_KEY
