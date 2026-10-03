@@ -14,6 +14,7 @@ import PlatformHighlights from "@/components/PlatformHighlights";
 import SearchRouteSync from "@/components/SearchRouteSync";
 import { HeaderSearchButton } from "@/components/GlobalSearch";
 import { firebaseAuth, firestore } from "@/lib/firebase";
+import { bestOffer, compareOffers, offerPriority } from "@/lib/offer-priority";
 import { regions } from "@/lib/regions";
 import { titlePath } from "@/lib/title-routes";
 import { rememberTitleNavigation } from "@/lib/title-navigation";
@@ -445,7 +446,6 @@ const catalog: Title[] = [
   },
 ];
 
-const offerOrder: Record<OfferType, number> = { included: 0, free: 1, rent: 2, buy: 3 };
 
 function getProvider(name: string, directory: ProviderStyle[] = featuredProviders) {
   if (name === "Apple TV") {
@@ -505,20 +505,6 @@ function applicationServerKey(value: string) {
   const bytes = new Uint8Array(decoded.length);
   for (let index = 0; index < decoded.length; index += 1) bytes[index] = decoded.charCodeAt(index);
   return bytes.buffer as ArrayBuffer;
-}
-
-function bestOffer(offers: Offer[], savedServices: string[]) {
-  const valueRank = (offer: Offer) => {
-    if (offer.type === "included" && savedServices.includes(offer.provider)) return savedServices.indexOf(offer.provider) / (savedServices.length + 1);
-    if (offer.type === "free") return 1;
-    if (offer.type === "rent") return 2;
-    if (offer.type === "buy") return 3;
-    return 4;
-  };
-  return [...offers].sort((a, b) => {
-    const rank = valueRank(a) - valueRank(b);
-    return rank || (a.price ?? 0) - (b.price ?? 0);
-  })[0];
 }
 
 const accessOptions: { id: AccessFilter; label: string }[] = [
@@ -866,7 +852,7 @@ export default function Home() {
     void fetch("/api/recommendations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ signals, preferredGenres }),
+      body: JSON.stringify({ signals, preferredGenres, services: savedServices, region: country }),
       signal: controller.signal,
     })
       .then(async (response) => {
@@ -878,7 +864,7 @@ export default function Home() {
       .catch(() => { if (!controller.signal.aborted) setPersonalizedSection(null); })
       .finally(() => { if (!controller.signal.aborted) setPersonalizedLoading(false); });
     return () => { window.cancelAnimationFrame(frame); controller.abort(); };
-  }, [hydrated, preferredGenres, tasteSignals]);
+  }, [country, hydrated, preferredGenres, savedServices, tasteSignals]);
 
   useEffect(() => {
     if (!hydrated || !accountUser) return;
@@ -1045,10 +1031,19 @@ export default function Home() {
         return haystack.includes(normalized);
       })
       .sort((a, b) => {
+        if (normalized && activeView !== "watchlist") {
+          const relevance = (title: string) => {
+            const value = title.toLowerCase();
+            return value === normalized ? 0 : value.startsWith(normalized) ? 1 : value.includes(normalized) ? 2 : 3;
+          };
+          const titleDifference = relevance(a.title) - relevance(b.title);
+          if (titleDifference) return titleDifference;
+        }
         const aOffer = bestOffer(a.offers, savedServices);
         const bOffer = bestOffer(b.offers, savedServices);
-        const accessDifference = (aOffer ? offerOrder[aOffer.type] : 9) - (bOffer ? offerOrder[bOffer.type] : 9);
-        return accessDifference || b.score - a.score;
+        const accessDifference = (aOffer ? offerPriority(aOffer, savedServices) : 9)
+          - (bOffer ? offerPriority(bOffer, savedServices) : 9);
+        return accessDifference || b.score - a.score || a.title.localeCompare(b.title);
       });
   }, [accessFilter, activeView, mediaFilter, providerFilter, savedServices, sourceTitles, submittedQuery, watchlist]);
 
@@ -1769,7 +1764,7 @@ export default function Home() {
                           aria-label={`Check where to watch ${item.title}`}
                         >
                           <span className="discoveryPoster" style={{ backgroundImage: `url(${JSON.stringify(item.posterUrl)})` }}>
-                            {item.score && <span className="discoveryScore">{item.score}%</span>}
+                            {item.score && <span className="discoveryScore" aria-label={`TMDB rating ${item.score} out of 100`}>{item.score}% <small>TMDB</small></span>}
                             <span className="discoveryPosterShade" aria-hidden="true" />
                             <span className="discoveryAction">Check availability <ArrowIcon /></span>
                           </span>
@@ -2020,7 +2015,7 @@ export default function Home() {
                   return (
                     <article className="titleCard" key={item.id}>
                       <div className={`poster ${item.art} ${item.backdropUrl || item.posterUrl ? "liveArtwork" : ""}`} style={artworkStyle(item)}>
-                        <span className="score">{item.live ? (item.score ? `${item.score}%` : "New") : `${item.score}% match`}</span>
+                        <span className="score">{item.live ? (item.score ? `${item.score}% score` : "New") : `${item.score}% demo score`}</span>
                         <button className={`saveButton ${saved ? "saved" : ""}`} data-testid={`save-${item.id}`} type="button" aria-pressed={saved} aria-label={`${saved ? "Remove" : "Save"} ${item.title} ${saved ? "from" : "to"} watchlist`} onClick={() => toggleWatchlist(item)}><BookmarkIcon filled={saved} /></button>
                         <button className="posterButton" type="button" onClick={() => openTitle(item)} aria-label={`See all watch options for ${item.title}`} />
                         <div className="posterShade" aria-hidden="true" />
@@ -2237,7 +2232,7 @@ export default function Home() {
       {selectedTitle && (() => {
         const offer = bestOffer(selectedTitle.offers, savedServices);
         const saved = watchlist.includes(selectedTitle.id);
-        const orderedOffers = offer ? [offer, ...selectedTitle.offers.filter((item) => item !== offer).sort((a, b) => offerOrder[a.type] - offerOrder[b.type])] : [];
+        const orderedOffers = [...selectedTitle.offers].sort((a, b) => compareOffers(a, b, savedServices));
         const credits = selectedTitle.watchmodeId ? creditsByTitle[selectedTitle.watchmodeId] ?? [] : [];
         const cast = credits.filter((credit) => credit.type === "cast");
         const crew = credits.filter((credit) => credit.type === "crew");
@@ -2266,7 +2261,7 @@ export default function Home() {
                   </a>
                 )}
                 <div className="detailHeroCopy">
-                  <p>{selectedTitle.live ? (selectedTitle.score ? `${selectedTitle.score}% score` : selectedTitle.offers.length ? "Live availability" : "Release tracking") : `${selectedTitle.score}% match`} · {selectedTitle.year} · {selectedTitle.rating}</p>
+                  <p>{selectedTitle.live ? (selectedTitle.score ? `${selectedTitle.score}% score` : selectedTitle.offers.length ? "Live availability" : "Release tracking") : `${selectedTitle.score}% demo score`} · {selectedTitle.year} · {selectedTitle.rating}</p>
                   <h2 id="title-modal-title">{selectedTitle.title}</h2>
                   <span>{selectedTitle.genres.join(" · ")} · {selectedTitle.runtime}</span>
                   {selectedTitle.networkNames && selectedTitle.networkNames.length > 0 && <span className="networkLine">From {selectedTitle.networkNames.join(" · ")}</span>}
