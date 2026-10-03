@@ -1,0 +1,18 @@
+runConfig:
+  minInstances: 0
+  maxInstances: 2
+  concurrency: 80
+  cpu: 1
+  memoryMiB: 512
+
+env:
+  - variable: WATCHMODE_API_KEY
+    secret: WATCHMODE_API_KEY
+  - variable: TMDB_ACCESS_TOKEN
+    secret: TMDB_ACCESS_TOKEN
+  - variable: YOUTUBE_API_KEY
+    secret: YOUTUBE_API_KEY
+  - variable: VAPID_PRIVATE_KEY
+    secret: VAPID_PRIVATE_KEY
+  - variable: WEB_PUSH_PUBLIC_KEY
+    value: BKAb51ZZ0qr5N8_LWvzjhgoTbIXMIjubN0h0lZZhWhjspZ-gMthbrqpxmQMBkb2R31l4gNexk4bPjKqChUO2qvI

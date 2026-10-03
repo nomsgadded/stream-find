@@ -1,0 +1,172 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function owns(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function requestPath(fromUid, toUid) {
+      return /databases/$(database)/documents/friendRequests/$(fromUid + "_" + toUid);
+    }
+
+    function pendingRequest(fromUid, toUid) {
+      return exists(requestPath(fromUid, toUid))
+        && get(requestPath(fromUid, toUid)).data.fromUid == fromUid
+        && get(requestPath(fromUid, toUid)).data.toUid == toUid
+        && get(requestPath(fromUid, toUid)).data.status == "pending";
+    }
+
+    function canAcceptFriendship(firstUid, secondUid) {
+      return signedIn()
+        && ((request.auth.uid == secondUid && pendingRequest(firstUid, secondUid))
+          || (request.auth.uid == firstUid && pendingRequest(secondUid, firstUid)));
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn();
+      allow create, update: if owns(userId)
+        && request.resource.data.uid == userId
+        && request.resource.data.usernameLower is string
+        && request.resource.data.usernameLower.matches('^[a-z0-9_]{3,20}$')
+        && existsAfter(/databases/$(database)/documents/usernames/$(request.resource.data.usernameLower))
+        && getAfter(/databases/$(database)/documents/usernames/$(request.resource.data.usernameLower)).data.uid == userId;
+      allow delete: if false;
+
+      match /watchlist/{titleId} {
+        allow read: if owns(userId)
+          || (signedIn() && exists(/databases/$(database)/documents/users/$(userId)/friends/$(request.auth.uid)));
+        allow create, update, delete: if owns(userId);
+      }
+
+      match /tasteSignals/{titleId} {
+        allow read: if owns(userId);
+        allow create, update: if owns(userId)
+          && request.resource.data.id is int
+          && request.resource.data.title is string
+          && request.resource.data.mediaType in ["movie", "show"]
+          && request.resource.data.signal in ["watched", "loved", "not_for_me"];
+        allow delete: if owns(userId);
+      }
+
+      match /availabilitySnapshots/{titleId} {
+        allow read: if owns(userId);
+        allow write: if false;
+      }
+
+      match /friends/{friendId} {
+        allow read: if owns(userId);
+        allow create: if signedIn()
+          && request.resource.data.uid == friendId
+          && canAcceptFriendship(userId, friendId);
+        allow update: if false;
+        allow delete: if signedIn() && (request.auth.uid == userId || request.auth.uid == friendId);
+      }
+
+      match /notifications/{notificationId} {
+        allow read: if owns(userId);
+        allow create: if signedIn()
+          && request.resource.data.toUid == userId
+          && request.resource.data.heading is string
+          && request.resource.data.body is string
+          && request.resource.data.href is string
+          && (
+            (owns(userId) && request.resource.data.type == "release_alert")
+            || (
+              request.resource.data.type == "friend_request"
+              && request.resource.data.actor.uid == request.auth.uid
+              && existsAfter(/databases/$(database)/documents/friendRequests/$(request.resource.data.requestId))
+              && getAfter(/databases/$(database)/documents/friendRequests/$(request.resource.data.requestId)).data.fromUid == request.auth.uid
+              && getAfter(/databases/$(database)/documents/friendRequests/$(request.resource.data.requestId)).data.toUid == userId
+              && getAfter(/databases/$(database)/documents/friendRequests/$(request.resource.data.requestId)).data.status == "pending"
+            )
+            || (
+              request.resource.data.type == "friend_accepted"
+              && request.resource.data.actor.uid == request.auth.uid
+              && existsAfter(/databases/$(database)/documents/friendRequests/$(request.resource.data.requestId))
+              && getAfter(/databases/$(database)/documents/friendRequests/$(request.resource.data.requestId)).data.fromUid == userId
+              && getAfter(/databases/$(database)/documents/friendRequests/$(request.resource.data.requestId)).data.toUid == request.auth.uid
+              && getAfter(/databases/$(database)/documents/friendRequests/$(request.resource.data.requestId)).data.status == "accepted"
+            )
+            || (
+              request.resource.data.type == "recommendation"
+              && request.resource.data.actor.uid == request.auth.uid
+              && existsAfter(/databases/$(database)/documents/recommendations/$(request.resource.data.recommendationId))
+              && getAfter(/databases/$(database)/documents/recommendations/$(request.resource.data.recommendationId)).data.fromUid == request.auth.uid
+              && getAfter(/databases/$(database)/documents/recommendations/$(request.resource.data.recommendationId)).data.toUid == userId
+            )
+          );
+        allow update: if owns(userId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["readAt", "dismissedAt"]);
+        allow delete: if owns(userId);
+      }
+
+      match /settings/{settingId} {
+        allow read, create, update, delete: if owns(userId);
+      }
+    }
+
+    match /usernames/{username} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && username.matches('^[a-z0-9_]{3,20}$')
+        && request.resource.data.uid == request.auth.uid;
+      allow update: if false;
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    match /friendRequests/{requestId} {
+      allow read: if signedIn()
+        && (resource.data.fromUid == request.auth.uid || resource.data.toUid == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.fromUid == request.auth.uid
+        && request.resource.data.toUid is string
+        && request.resource.data.toUid != request.auth.uid
+        && request.resource.data.status == "pending"
+        && requestId == request.auth.uid + "_" + request.resource.data.toUid;
+      allow update: if signedIn()
+        && resource.data.toUid == request.auth.uid
+        && resource.data.status == "pending"
+        && request.resource.data.fromUid == resource.data.fromUid
+        && request.resource.data.toUid == resource.data.toUid
+        && request.resource.data.status in ["accepted", "declined"]
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "respondedAt"]);
+      allow delete: if signedIn()
+        && (resource.data.fromUid == request.auth.uid || resource.data.toUid == request.auth.uid);
+    }
+
+    match /recommendations/{recommendationId} {
+      allow read: if signedIn()
+        && (resource.data.fromUid == request.auth.uid || resource.data.toUid == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.fromUid == request.auth.uid
+        && request.resource.data.toUid is string
+        && request.resource.data.toUid != request.auth.uid
+        && request.resource.data.sender.uid == request.auth.uid
+        && request.resource.data.title is map
+        && request.resource.data.status == "sent"
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid)/friends/$(request.resource.data.toUid));
+      allow update: if signedIn()
+        && resource.data.toUid == request.auth.uid
+        && request.resource.data.fromUid == resource.data.fromUid
+        && request.resource.data.toUid == resource.data.toUid
+        && request.resource.data.sender == resource.data.sender
+        && request.resource.data.title == resource.data.title
+        && request.resource.data.titlePath == resource.data.titlePath
+        && request.resource.data.message == resource.data.message
+        && request.resource.data.sentAt == resource.data.sentAt
+        && request.resource.data.status in ["opened", "saved", "dismissed"]
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "openedAt", "savedAt", "dismissedAt"]);
+      allow delete: if signedIn()
+        && (resource.data.fromUid == request.auth.uid || resource.data.toUid == request.auth.uid);
+    }
+
+    match /reviewSessions/{sessionId}/{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

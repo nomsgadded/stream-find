@@ -1,0 +1,25 @@
+Streaming service logos are displayed for provider identification only.
+All trademarks and brand marks belong to their respective owners.
+
+Service logos in the live provider directory are supplied by Watchmode when available:
+https://api.watchmode.com/docs
+Title-specific provider logos may be supplied by TMDB:
+https://developer.themoviedb.org/docs/image-basics
+Unavailable or generic source images are represented by a neutral play symbol.
+
+Netflix, Apple TV, Tubi, Roku, Paramount+, Starz, Crunchyroll, YouTube TV, and Google TV icons are sourced from Simple Icons under CC0 1.0:
+https://simpleicons.org/
+
+The HBO Max logo is the current 2025 wordmark, sourced from Wikimedia Commons:
+https://commons.wikimedia.org/wiki/File:HBO_Max_(2025).svg
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Disney+, Prime Video, Hulu, Peacock, Pluto TV, and Discovery+ icons are adapted from Arcticons through Iconify under CC BY-SA 4.0:
+https://arcticons.com/
+https://creativecommons.org/licenses/by-sa/4.0/
+
+Rakuten Viki is displayed using its provider mark.
+
+Cast profile images, when available, are supplied by TMDB:
+https://www.themoviedb.org/
+This product uses the TMDB API but is not endorsed or certified by TMDB.
