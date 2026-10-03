@@ -66,19 +66,17 @@ export async function POST(request: Request) {
     if (!candidates.length) return Response.json({ error: "No included picks matched these services and filters. Try another mood or time, or add a service." }, { status: 422 });
     const reference = adminFirestore.collection("groupPicks").doc();
     const people = members.map(({ uid, name, region }) => ({ uid, name, region }));
-    await reference.set({ hostUid: user.uid, participantUids: uids, people, region: members[0].region, mood, duration, candidates, votes: {}, status: "open", createdAt: FieldValue.serverTimestamp() });
-    if (friendUids.length) {
-      const batch = adminFirestore.batch();
-      for (const uid of friendUids as string[]) {
-        batch.set(adminFirestore.doc(`users/${uid}/notifications/group-invite-${reference.id}`), {
-          type: "group_invite", toUid: uid, actor: { uid: user.uid, displayName: members[0].name },
-          heading: `${members[0].name} invited you to pick tonight’s watch`,
-          body: `Vote on ${candidates.length} picks available on your circle’s services.`,
-          href: `/together/${reference.id}`, createdAt: FieldValue.serverTimestamp(),
-        });
-      }
-      await batch.commit();
+    const batch = adminFirestore.batch();
+    batch.set(reference, { hostUid: user.uid, participantUids: uids, people, region: members[0].region, mood, duration, candidates, votes: {}, status: "open", createdAt: FieldValue.serverTimestamp() });
+    for (const uid of friendUids as string[]) {
+      batch.set(adminFirestore.doc(`users/${uid}/notifications/group-invite-${reference.id}`), {
+        type: "group_invite", toUid: uid, actor: { uid: user.uid, displayName: members[0].name },
+        heading: `${members[0].name} invited you to pick tonight’s watch`,
+        body: `Vote on ${candidates.length} picks available on your circle’s services.`,
+        href: `/together/${reference.id}`, createdAt: FieldValue.serverTimestamp(),
+      });
     }
+    await batch.commit();
     return Response.json({ id: reference.id }, { status: 201 });
   } catch {
     return Response.json({ error: "Your movie night could not be created. Try again." }, { status: 502 });
