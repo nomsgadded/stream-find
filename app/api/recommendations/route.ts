@@ -167,9 +167,14 @@ async function rankWithAccess(candidates: RankedTitle[], services: string[], reg
     return { ...candidate, includedOn };
   }));
 
-  return checked.sort((a, b) => Number(Boolean(b.includedOn.length)) - Number(Boolean(a.includedOn.length))
-    || (a.includedOn.length ? services.indexOf(a.includedOn[0]) : 99) - (b.includedOn.length ? services.indexOf(b.includedOn[0]) : 99)
-    || b.rank - a.rank)
+  return checked.sort((a, b) => {
+    const accessDifference = Number(Boolean(b.includedOn.length)) - Number(Boolean(a.includedOn.length));
+    if (accessDifference) return accessDifference;
+    const rankDifference = b.rank - a.rank;
+    if (Math.abs(rankDifference) > 2) return rankDifference;
+    return (a.includedOn.length ? services.indexOf(a.includedOn[0]) : 99)
+      - (b.includedOn.length ? services.indexOf(b.includedOn[0]) : 99) || rankDifference;
+  })
     .slice(0, 12)
     .map(({ title, mediaType, reason, includedOn }) => normalizeTitle(title, mediaType,
       includedOn.length ? `${reason} · Included on ${includedOn.slice(0, 2).join(" and ")} in ${region}` : reason));
