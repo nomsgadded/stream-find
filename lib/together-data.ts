@@ -1,10 +1,11 @@
 import { getRegionConfig } from "@/lib/regions";
+import { normalizedService } from "@/lib/offer-priority";
 
 const API = "https://api.themoviedb.org/3";
 const IMAGE = "https://image.tmdb.org/t/p";
 
 type Provider = { provider_id: number; provider_name: string };
-type TmdbTitle = { id: number; title?: string; name?: string; poster_path?: string | null; release_date?: string; first_air_date?: string; genre_ids?: number[]; vote_average?: number };
+type TmdbTitle = { id: number; title?: string; name?: string; poster_path?: string | null; release_date?: string; first_air_date?: string; genre_ids?: number[]; vote_average?: number; popularity?: number };
 type Availability = { results?: Record<string, { flatrate?: Provider[] }> };
 export type MemberTaste = { uid: string; name: string; region: string; services: string[]; genres: string[]; saved: Set<string> };
 export type GroupCandidate = {
@@ -26,13 +27,6 @@ const genreNames: Record<number, string> = {
 export const moods = ["Any", ...Object.keys(moodGenres)];
 export const durations = ["Any", "Under 2 hours", "One episode"];
 
-export function normalizeService(name: string) {
-  return name.toLowerCase().replace(/[^a-z0-9]/g, "")
-    .replace(/^hbomax$/, "max").replace(/^amazonprimevideo$/, "primevideo")
-    .replace(/^amazonvideo$/, "primevideo").replace(/^disneyplus$/, "disney")
-    .replace(/^appletvplus$/, "appletv");
-}
-
 async function tmdb<T>(path: string, token: string, params: Record<string, string> = {}): Promise<T> {
   const url = new URL(`${API}${path}`);
   url.searchParams.set("language", "en-US");
@@ -44,13 +38,14 @@ async function tmdb<T>(path: string, token: string, params: Record<string, strin
 
 export async function groupCandidates(members: MemberTaste[], mood: string, duration: string, token: string) {
   const region = getRegionConfig(members[0].region).code;
-  const services = [...new Set(members.filter((member) => member.region === region).flatMap((member) => member.services.map(normalizeService)))];
+  const localMembers = members.filter((member) => member.region === region);
+  const services = [...new Set(localMembers.flatMap((member) => member.services.map(normalizedService)))];
   if (!services.length) return [];
   const types = duration === "One episode" ? ["show" as const] : ["movie" as const, "show" as const];
   const results = await Promise.all(types.map(async (mediaType) => {
     const endpoint = mediaType === "show" ? "tv" : "movie";
     const directory = await tmdb<{ results?: Provider[] }>(`/watch/providers/${endpoint}`, token, { watch_region: region });
-    const ids = (directory.results ?? []).filter((provider) => services.includes(normalizeService(provider.provider_name))).map((provider) => provider.provider_id);
+    const ids = (directory.results ?? []).filter((provider) => services.includes(normalizedService(provider.provider_name))).map((provider) => provider.provider_id);
     if (!ids.length) return [];
     const parameters: Record<string, string> = {
       watch_region: region, with_watch_providers: ids.join("|"), with_watch_monetization_types: "flatrate",
@@ -69,15 +64,16 @@ export async function groupCandidates(members: MemberTaste[], mood: string, dura
     try {
       const response = await tmdb<Availability>(`/${mediaType === "show" ? "tv" : "movie"}/${item.id}/watch/providers`, token);
       const listed = response.results?.[region]?.flatrate ?? [];
-      const offered = new Set(listed.map((provider) => normalizeService(provider.provider_name)));
-      const matched = members.filter((member) => member.region === region && member.services.some((name) => offered.has(normalizeService(name))));
+      const offered = new Set(listed.map((provider) => normalizedService(provider.provider_name)));
+      const matched = localMembers.filter((member) => member.services.some((name) => offered.has(normalizedService(name))));
       if (!matched.length) return null;
-      const availableOn = [...new Set(listed.filter((provider) => services.includes(normalizeService(provider.provider_name))).map((provider) => provider.provider_name))];
+      const availableOn = [...new Set(listed.filter((provider) => services.includes(normalizedService(provider.provider_name))).map((provider) => provider.provider_name))];
       const savedBy = members.filter((member) => member.saved.has(key)).map((member) => member.name);
       const titleGenres = (item.genre_ids ?? []).map((id) => genreNames[id]?.toLowerCase());
       const taste = members.reduce((total, member) => total + member.genres.filter((name) => titleGenres.includes(name.toLowerCase())).length, 0);
-      const rank = matched.length * 20 + savedBy.length * 8 + taste * 2 + (item.vote_average ?? 0);
-      const reason = `${matched.length} of ${members.length} ${members.length === 1 ? "person has" : "people have"} an included service${savedBy.length ? ` · ${savedBy.length} saved it` : ""}`;
+      const rank = matched.length * 20 + savedBy.length * 8 + taste * 2
+        + (item.vote_average ?? 0) + Math.log10((item.popularity ?? 0) + 1) * 2;
+      const reason = `${matched.length} of ${localMembers.length} ${localMembers.length === 1 ? "person has" : "people have"} an included service in ${region}${savedBy.length ? ` · ${savedBy.length} saved it` : ""}`;
       return { key, tmdbId: item.id, mediaType, title, year: Number((item.release_date || item.first_air_date || "").slice(0, 4)) || undefined,
         posterUrl: `${IMAGE}/w342${item.poster_path}`, availableOn, includedFor: matched.length, savedBy, reason, rank };
     } catch { return null; }
