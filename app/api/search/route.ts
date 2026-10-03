@@ -1,8 +1,13 @@
 import { getRegionConfig } from "@/lib/regions";
 import { groupTitleRecords, mergeTitleRecords, sameTitle } from "@/lib/title-records";
+import { normalizeSearch, parseSearch, searchMatchScore } from "@/lib/search-matching";
+import { rememberSearchAvailability } from "@/lib/search-availability";
+import { searchCatalog, type CatalogTitle } from "@/lib/search-catalog";
+import { catalogProviderOffers, mergeProviderOffers } from "@/lib/search-providers";
 
 const WATCHMODE_API = "https://api.watchmode.com/v1";
 const PAGE_SIZE = 12;
+type SearchResult = NonNullable<Awaited<ReturnType<typeof fetchDetails>>> | Awaited<ReturnType<typeof resolveCatalogTitle>>;
 
 type OfferType = "included" | "free" | "rent" | "buy";
 
@@ -90,7 +95,7 @@ export async function GET(request: Request) {
     return Response.json({ error: "The selected title is invalid." }, { status: 400 });
   }
 
-  if (query.length < 2 || query.length > 80) {
+  if ((!requestedId && query.length < 2) || query.length > 80) {
     return Response.json(
       { error: "Enter between 2 and 80 characters." },
       { status: 400 },
@@ -107,10 +112,11 @@ export async function GET(request: Request) {
 
   try {
     let nextPage: number | null = null;
-    let titles: NonNullable<Awaited<ReturnType<typeof fetchDetails>>>[];
+    let titles: SearchResult[];
     if (requestedId) {
       const selected = await fetchDetails(requestedId, apiKey, region.code, region.currency);
-      titles = selected ? [selected] : [];
+      if (!selected) throw new Error("502");
+      titles = [selected];
       if (selected && (!selected.offers.length || !selected.posterUrl || selected.synopsis === "Synopsis unavailable.")) {
         const peers = await findMatches(selected.title, apiKey).catch(() => []);
         const peerIds = peers.filter((peer) => peer.id !== requestedId && sameTitle(peer, selected)).map((peer) => peer.id);
@@ -118,13 +124,27 @@ export async function GET(request: Request) {
         titles = mergeTitleRecords([...titles, ...related.flatMap((result) => result.status === "fulfilled" && result.value ? [result.value] : [])]);
       }
     } else {
-      const groups = groupTitleRecords(await findMatches(query, apiKey));
+      const [watchmode, catalog] = await Promise.allSettled([findMatches(query, apiKey), searchCatalog(query)]);
+      const extra = catalog.status === "fulfilled" ? catalog.value : [];
+      if (watchmode.status === "rejected" && !extra.length) throw watchmode.reason;
+      const candidates = [...(watchmode.status === "fulfilled" ? watchmode.value : []), ...extra];
+      const groups = groupTitleRecords(candidates).sort((a, b) => searchMatchScore(a[0].title, query, a[0].year) - searchMatchScore(b[0].title, query, b[0].year));
       const pageGroups = groups.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-      const details = await Promise.allSettled(pageGroups.flatMap((group) => group.map((item) => fetchDetails(item.id, apiKey, region.code, region.currency))));
+      const details = await Promise.allSettled(pageGroups.flatMap<Promise<SearchResult | null>>((group) => {
+        const known = group.filter((item) => item.id > 0);
+        return known.length ? known.map((item) => fetchDetails(item.id, apiKey, region.code, region.currency))
+          : [resolveCatalogTitle(group[0] as CatalogTitle, apiKey, region.code, region.currency)];
+      }));
       titles = mergeTitleRecords(details.flatMap((result) => result.status === "fulfilled" && result.value ? [result.value] : []));
+      if (pageGroups.length && !titles.length) throw new Error("502");
       nextPage = page * PAGE_SIZE < groups.length ? page + 1 : null;
     }
 
+    for (const title of titles) {
+      const ids = [...((title as { watchmodeIds?: number[] }).watchmodeIds ?? (title.watchmodeId ? [title.watchmodeId] : []))];
+      if (title.tmdbId && (!("availabilityKnown" in title) || title.availabilityKnown !== false)) ids.push(-(title.mediaType === "movie" ? 1_000_000_000 : 2_000_000_000) - title.tmdbId);
+      rememberSearchAvailability(ids, region.code, title.offers);
+    }
     return Response.json(
       {
         attribution: {
@@ -147,42 +167,66 @@ export async function GET(request: Request) {
   }
 }
 
+async function resolveCatalogTitle(item: CatalogTitle, apiKey: string, region: string, currency: string) {
+  try {
+    const url = new URL(`${WATCHMODE_API}/search/`);
+    url.searchParams.set("search_field", item.mediaType === "movie" ? "tmdb_movie_id" : "tmdb_tv_id");
+    url.searchParams.set("search_value", String(item.tmdbId));
+    const response = await fetch(url, { headers: { "X-API-Key": apiKey, Accept: "application/json" }, signal: AbortSignal.timeout(6000) });
+    if (response.ok) {
+      const data = await response.json() as WatchmodeSearchResponse;
+      const matched = data.title_results?.find((title) => Number.isSafeInteger(title.id) && title.id! > 0
+        && (!title.tmdb_id || title.tmdb_id === item.tmdbId)
+        && (title.type?.includes("movie") ? "movie" : "show") === item.mediaType);
+      if (matched?.id) {
+        const details = await fetchDetails(matched.id, apiKey, region, currency);
+        if (details) return { ...details, corrected: item.corrected };
+      }
+    }
+  } catch { /* Keep the metadata result when availability cannot be verified. */ }
+  const providers = await catalogProviderOffers(item.tmdbId, item.mediaType, region);
+  return { id: -1_000_000_000 - item.tmdbId, title: item.title, year: item.year ?? 0, mediaType: item.mediaType,
+    tmdbId: item.tmdbId, watchmodeId: undefined, art: "posterPaper", genres: [], offers: providers ?? [],
+    synopsis: item.synopsis, posterUrl: item.imageUrl, backdropUrl: item.imageUrl,
+    runtime: item.mediaType === "movie" ? "Film" : "TV series", score: item.score, rating: "NR",
+    live: true, region, availabilityKnown: providers !== undefined, corrected: item.corrected,
+  };
+}
+
 async function findMatches(query: string, apiKey: string) {
   const searchUrl = new URL(`${WATCHMODE_API}/search/`);
-  searchUrl.searchParams.set("apiKey", apiKey);
   searchUrl.searchParams.set("search_field", "name");
-  searchUrl.searchParams.set("search_value", query);
+  searchUrl.searchParams.set("search_value", parseSearch(query).term || normalizeSearch(query));
   const partialUrl = new URL(`${WATCHMODE_API}/autocomplete-search/`);
-  partialUrl.searchParams.set("apiKey", apiKey);
-  partialUrl.searchParams.set("search_value", query);
+  partialUrl.searchParams.set("search_value", parseSearch(query).term || normalizeSearch(query));
   partialUrl.searchParams.set("search_type", "2");
   const responses = await Promise.allSettled([searchUrl, partialUrl].map(async (url) => {
-    const response = await fetch(url, { headers: { Accept: "application/json" } });
+    const response = await fetch(url, { headers: { Accept: "application/json", "X-API-Key": apiKey }, signal: AbortSignal.timeout(10_000) });
     if (!response.ok) throw new Error(String(response.status));
     const data = await response.json() as WatchmodeSearchResponse & { results?: WatchmodeSearchResult[] };
     return data.title_results ?? (data.results ?? []).filter((item) => !item.result_type || item.result_type === "title");
   }));
   if (responses.every((result) => result.status === "rejected")) throw responses[0].reason;
-  const normalized = query.toLocaleLowerCase();
   const matches = responses.flatMap((result) => result.status === "fulfilled" ? result.value : [])
-    .filter((item) => item.name?.toLocaleLowerCase().includes(normalized))
+    .filter((item) => typeof item.name === "string" && (!item.result_type || item.result_type === "title"))
     .flatMap((item) => typeof item.id === "number" && Number.isSafeInteger(item.id) && item.id > 0 ? [{
       id: item.id, title: item.name!, year: item.year,
       mediaType: item.type?.includes("movie") ? "movie" as const : "show" as const,
       ...(item.tmdb_id ? { tmdbId: item.tmdb_id } : {}),
       ...(item.imdb_id ? { imdbId: item.imdb_id } : {}),
     }] : []);
-  return [...new Map(matches.map((item) => [item.id, item])).values()];
+  return [...new Map(matches.map((item) => [item.id, item])).values()]
+    .sort((a, b) => searchMatchScore(a.title, query, a.year) - searchMatchScore(b.title, query, b.year));
 }
 
 async function fetchDetails(id: number, apiKey: string, region: string, currency: string) {
   const detailsUrl = new URL(`${WATCHMODE_API}/title/${id}/details/`);
-  detailsUrl.searchParams.set("apiKey", apiKey);
   detailsUrl.searchParams.set("append_to_response", "sources");
   detailsUrl.searchParams.set("regions", region);
 
   const response = await fetch(detailsUrl, {
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", "X-API-Key": apiKey },
+    signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) return null;
 
@@ -194,6 +238,7 @@ async function fetchDetails(id: number, apiKey: string, region: string, currency
   const offers = normalizeOffers(details.sources ?? [], region, currency);
 
   const mediaType: "movie" | "show" = details.type?.includes("movie") ? "movie" : "show";
+  const supplemental = details.tmdb_id ? await catalogProviderOffers(details.tmdb_id, mediaType, region) : undefined;
   const score = normalizeScore(details.critic_score, details.user_rating);
   const parsedYear = Number(details.release_date?.slice(0, 4));
   const year = details.year
@@ -213,7 +258,7 @@ async function fetchDetails(id: number, apiKey: string, region: string, currency
     live: true,
     mediaType,
     networkNames: (details.network_names ?? []).slice(0, 3),
-    offers,
+    offers: mergeProviderOffers(offers, supplemental ?? []),
     ...(typeof details.popularity_percentile === "number" ? { popularityPercentile: Math.round(details.popularity_percentile) } : {}),
     rating: details.us_rating || "NR",
     region,

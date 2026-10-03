@@ -145,6 +145,10 @@ a { color: inherit; text-decoration: none; }
 .globalSearchResults small { color: #77746e; font-size: 9px; font-weight: 680; letter-spacing: .07em; text-transform: uppercase; }
 .globalSearchResults i { color: var(--amber-soft); font-size: 16px; font-style: normal; }
 .globalSearchResults > p { margin: 22px 12px; color: #77746e; font-size: 11px; line-height: 1.55; }
+.globalSearchBody { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.globalSearchBody > p:not(.srOnly) { margin: 12px 26px 20px; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.globalSearchBody > p button { min-height: 44px; border: 0; background: transparent; color: var(--amber); cursor: pointer; }
+.globalSearchBody > .recentSearches { margin: 0 26px 16px; }
 .globalSearchPanel > footer { min-height: 48px; padding: 0 26px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid rgba(255,255,255,.08); color: #66635e; font-size: 9px; }
 .globalSearchPanel kbd { padding: 4px 6px; border: 1px solid rgba(255,255,255,.12); border-radius: 5px; background: rgba(255,255,255,.04); color: #8c8983; font: inherit; }
 
@@ -237,9 +241,18 @@ a { color: inherit; text-decoration: none; }
 }
 .searchShell input { flex: 1; min-width: 0; border: 0; outline: 0; color: #111114; background: transparent; font-size: 16px; }
 .searchShell input::placeholder { color: #77736d; }
+.searchShell .searchClear, .globalSearchPanel .searchClear { flex: 0 0 44px; width: 44px; height: 44px; min-height: 44px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 50%; background: transparent; color: #67635d; font: inherit; font-size: 26px; line-height: 1; cursor: pointer; }
+.searchShell .searchClear:hover, .globalSearchPanel .searchClear:hover { transform: none; background: rgba(0,0,0,.07); color: #111114; }
+.searchClear:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.globalSearchFieldActions { display: flex; align-items: center; gap: 8px; }
+#title-search::-webkit-search-cancel-button, #global-title-search::-webkit-search-cancel-button { display: none; }
 .searchShell button { height: 50px; padding: 0 20px; display: flex; align-items: center; gap: 12px; border: 0; border-radius: 8px; background: #151519; color: white; font-weight: 650; cursor: pointer; transition: transform .2s ease, background .2s ease; }
 .searchShell button:hover { transform: translateY(-1px); background: #29282c; }
 .searchShell button:disabled { opacity: .72; cursor: wait; transform: none; }
+.searchShell button[type="submit"]:not(:disabled) { background: var(--amber); color: #111114; }
+.searchShell button[type="submit"]:not(:disabled):hover { background: var(--amber-soft); }
+.searchShell button[type="submit"]:disabled { opacity: 1; background: #d2cfc8; color: #827e77; cursor: not-allowed; transform: none; }
+.searchShell button[type="submit"]:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
 .autocompletePanel {
   position: absolute;
   top: calc(100% + 9px);
@@ -291,6 +304,7 @@ a { color: inherit; text-decoration: none; }
 .autocompleteCopy { min-width: 0; display: grid; gap: 5px; }
 .autocompleteCopy strong { overflow: hidden; color: #f4f1ea; font-size: 14px; font-weight: 660; text-overflow: ellipsis; white-space: nowrap; }
 .autocompleteCopy > span { color: #8f8d88; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.autocompleteCopy .suggestionAvailability, .globalSearchResults .suggestionAvailability { color: var(--amber-soft); font-size: 11px; line-height: 1.4; }
 .autocompleteOption > .icon { width: 16px; color: var(--amber-soft); opacity: .7; }
 .searchHints { margin-top: 15px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: #8e8c88; font-size: 12px; }
 .searchHints button { padding: 0; border: 0; background: none; color: #cac7c0; cursor: pointer; }
@@ -497,6 +511,26 @@ a { color: inherit; text-decoration: none; }
 .titleActionBar > div button.saved { border-color: rgba(244,184,63,.42); background: rgba(244,184,63,.12); color: var(--amber-soft); }
 .titleSectionDock, .titleSectionDesktopNav { position: fixed; z-index: 59; top: 148px; left: clamp(24px, 4vw, 72px); right: clamp(24px, 4vw, 72px); border: 1px solid rgba(255,255,255,.15); border-radius: 0 0 16px 16px; background: rgba(17,17,21,.97); box-shadow: 0 18px 48px rgba(0,0,0,.35); backdrop-filter: blur(18px); }
 .titleSectionDock { display: none; }
+.titleGlobalHeader, .titleActionBar, .titleSectionDock, .titleSectionDesktopNav { transition: transform .22s ease, opacity .18s ease, visibility .22s; }
+.titlePage[data-nav-hidden] > .titleGlobalHeader,
+.titlePage[data-nav-hidden] > .titleActionBar,
+.titlePage[data-nav-hidden] > .titleSectionDock,
+.titlePage[data-nav-hidden] > .titleSectionDesktopNav { transform: translateY(-210px); opacity: 0; visibility: hidden; pointer-events: none; }
+.titleSectionTrigger { min-height: 44px; padding: 0 17px; align-items: center; justify-content: space-between; color: var(--amber-soft); font: inherit; font-size: 10px; font-weight: 750; letter-spacing: .14em; text-transform: uppercase; text-align: left; cursor: pointer; }
+.titleSectionSheet { position: fixed; inset: 0; width: 100%; height: 100dvh; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; background: transparent; color: inherit; }
+.titleSectionSheet[open] { display: flex; align-items: flex-end; }
+.titleSectionSheet::backdrop { background: rgba(0,0,0,.55); backdrop-filter: blur(4px); }
+.titleSectionSheetPanel { width: 100%; max-height: 80dvh; overflow-y: auto; overscroll-behavior: contain; padding: 18px 20px max(26px, env(safe-area-inset-bottom)); border-radius: 18px 18px 0 0; border-top: 1px solid rgba(255,255,255,.15); background: #111115; box-shadow: 0 -12px 40px rgba(0,0,0,.3); animation: titleSheetUp .22s ease both; }
+.titleSectionSheetPanel header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+.titleSectionSheetPanel header p { margin: 0 0 5px; color: var(--amber-soft); font-family: Georgia, serif; font-size: 19px; }
+.titleSectionSheetPanel h2 { margin: 0; font-size: 10px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: #aaa7a1; }
+.titleSectionSheetPanel header button { min-height: 44px; padding: 0 16px; border: 1px solid rgba(255,255,255,.3); border-radius: 99px; background: transparent; color: inherit; cursor: pointer; }
+.titleSectionSheetPanel nav { display: grid; }
+.titleSectionSheetPanel nav a { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 60px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.12); font-family: Georgia, serif; font-size: 24px; }
+.titleSectionSheetPanel nav a:last-child { border-bottom: 0; }
+.titleSectionSheetPanel nav a[aria-current] { color: var(--amber-soft); }
+.titleSectionTrigger:focus-visible, .titleSectionSheetPanel a:focus-visible, .titleSectionSheetPanel button:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+@keyframes titleSheetUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 .titleSectionDesktopNav { overflow: hidden; }
 .titleSectionDesktopNav nav { height: 44px; padding: 0 22px; display: flex; align-items: stretch; justify-content: space-between; gap: 30px; overflow-x: auto; scrollbar-width: none; scroll-behavior: smooth; }
 .titleSectionDesktopNav nav::-webkit-scrollbar { display: none; }
@@ -563,6 +597,7 @@ a { color: inherit; text-decoration: none; }
 .titleTrailer iframe { width: 100%; height: 100%; border: 0; }
 .titleSeasonTabs { margin: -4px 0 18px; padding-bottom: 8px; display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none; }
 .titleSeasonTabs::-webkit-scrollbar { display: none; }
+.seasonAvailabilityStatus { margin: 0 0 18px; color: #aaa7a1; font-size: 12px; line-height: 1.5; }
 .titleSeasonTabs button { flex: 0 0 auto; min-height: 34px; padding: 0 13px; border: 1px solid rgba(255,255,255,.12); border-radius: 999px; background: transparent; color: #777570; font-size: 10px; cursor: pointer; }
 .titleSeasonTabs button.active { border-color: var(--amber); background: var(--amber); color: #111114; }
 .titleSeasonPanel { padding: 20px; display: grid; grid-template-columns: minmax(220px, .7fr) minmax(0, 1.3fr); gap: 24px; border: 1px solid rgba(255,255,255,.1); border-radius: 13px; background: #101014; }
@@ -574,12 +609,15 @@ a { color: inherit; text-decoration: none; }
 .titleSeasonProviders span { padding: 10px 12px; display: grid; gap: 3px; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; background: rgba(0,0,0,.18); }
 .titleSeasonProviders small { color: #777570; font-size: 9px; }
 .titleCreditsGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.titleCreditsExpand { display: block; min-height: 44px; margin: 20px auto 0; padding: 10px 20px; border: 1px solid rgba(255,255,255,.15); border-radius: 999px; background: transparent; color: #b7b4ae; font: inherit; font-size: 12px; cursor: pointer; }
+.titleCreditsExpand:hover { border-color: rgba(244,184,63,.34); color: var(--amber-soft); }
+.titleCreditsExpand:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
 .titleCreditsGrid article, .titleCreditsGrid > button { min-height: 72px; padding: 10px; display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; gap: 12px; border: 1px solid rgba(255,255,255,.09); border-radius: 10px; background: #101014; color: inherit; text-align: left; }
 .titleCreditsGrid > button { cursor: pointer; transition: border-color .2s ease, transform .2s ease; }
 .titleCreditsGrid > button:hover { border-color: rgba(244,184,63,.34); transform: translateY(-2px); }
-.titleCreditsGrid article > span, .titleCreditsGrid > button > span { width: 52px; height: 52px; display: grid; place-items: center; border-radius: 50%; background: #25252b center / cover no-repeat; color: #8f8c86; font-size: 11px; font-weight: 800; }
+.titleCreditsGrid article > span, .titleCreditsGrid > button > span { position: relative; width: 52px; height: 52px; aspect-ratio: 1; min-width: 0; min-height: 0; overflow: hidden; display: grid; place-items: center; border-radius: 50%; background: #25252b center / cover no-repeat; color: #8f8c86; font-size: 11px; font-weight: 800; }
 .titleCreditsGrid article > span.hasPhoto, .titleCreditsGrid > button > span.hasPhoto { box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
-.titleCreditsGrid article > span img, .titleCreditsGrid > button > span img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
+.titleCreditsGrid article > span img, .titleCreditsGrid > button > span img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; border-radius: inherit; object-fit: cover; object-position: center; }
 .titleCreditsGrid article div, .titleCreditsGrid > button div { min-width: 0; display: grid; gap: 4px; }
 .titleCreditsGrid strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .titleCreditsGrid small { overflow: hidden; color: #777570; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
@@ -1208,7 +1246,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
   .titleActionBar > strong span { max-width: 32vw; font-size: 14px; }
   .titleActionBar > strong small { display: none; }
   .titleSectionDesktopNav { display: none; }
-  .titleSectionDock { display: block; top: 128px; left: 12px; right: 12px; border-top: 0; }
+  .titleSectionDock { display: flex; top: 128px; left: 12px; right: 12px; border-top: 0; min-height: 44px; }
   .titleSectionDock summary { min-height: 42px; padding: 0 17px; }
   .titleHero { min-height: 760px; padding: 180px 19px 54px; background-position: 62% center; }
   .titleHeroContent { display: block; }
@@ -1337,15 +1375,20 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 .togetherCandidates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
 .togetherCandidate { min-width: 0; padding: 15px; display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 18px; border: 1px solid rgba(255,255,255,.14); border-radius: 14px; background: #111115; }
 .togetherCandidate.winner { border-color: rgba(244,184,63,.55); background: linear-gradient(130deg, rgba(244,184,63,.1), #111115 40%); }
-.togetherCandidatePoster { min-height: 168px; border-radius: 8px; background: #242329 center / cover no-repeat; }
+.togetherCandidatePoster { align-self: start; width: 100%; aspect-ratio: 2 / 3; border-radius: 8px; background: #242329 center / cover no-repeat; }
+.togetherCandidateCopy { min-width: 0; }
+.togetherDetailsLink { display: inline-block; margin-top: 12px; color: #ece8df; font-size: 11px; text-decoration: underline; text-underline-offset: 3px; }
+.togetherVotingHelp { margin: -6px 0 20px; color: #aaa69f; font-size: 12px; line-height: 1.5; }
+.togetherCandidateFooter { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.09); }
+.togetherCandidateFooter .togetherVotes, .togetherCandidateFooter .togetherCandidateActions { margin-top: 0; }
 .togetherCandidate h3 { margin: 7px 0; font-family: Georgia, serif; font-size: 25px; font-weight: 400; line-height: 1.1; }
 .togetherCandidate p:not(.togetherStep) { margin: 0 0 8px; color: #c7c3bc; font-size: 11px; }
 .togetherCandidate small { color: #8d8983; font-size: 10px; line-height: 1.45; }
 .togetherVotes { margin-top: 13px; color: var(--amber-soft); font-size: 10px; }
 .togetherCandidateActions { margin-top: 15px; display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
 .togetherCandidateActions a { color: #ece8df; font-size: 10px; text-decoration: underline; }
-.togetherCandidateActions button { min-height: 32px; padding: 0 10px; }
-.togetherCandidateActions .togetherFinalize { border-color: var(--amber); background: var(--amber); color: #111114; }
+.togetherCandidateActions button { min-height: 44px; padding: 0 16px; }
+.togetherCandidateActions .togetherFinalize { border-color: rgba(255,255,255,.17); background: transparent; color: #c5c1b9; font-weight: 500; }
 .togetherFootnote { margin-top: 24px; color: #777570; font-size: 11px; line-height: 1.6; }
 @media (max-width: 820px) {
   .togetherTeaser { align-items: start; flex-direction: column; }
@@ -1367,7 +1410,6 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
   .togetherIntro > p { font-size: 14px; }
   .togetherSetup > section { padding: 22px; }
   .togetherCandidate { grid-template-columns: 88px minmax(0, 1fr); gap: 13px; }
-  .togetherCandidatePoster { min-height: 135px; }
   .togetherCandidate h3 { font-size: 22px; }
   .togetherCandidateActions a { width: 100%; }
   .togetherRoomActions { align-items: start; flex-direction: column; }
@@ -1471,3 +1513,15 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 .circleSectionHeading { margin: 24px 0 14px; }
 .circleSectionHeading h3 { margin: 0 0 6px; color: var(--paper); font-family: Georgia, serif; font-size: 24px; font-weight: 400; }
 .circleSectionHeading p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.recentSearches { margin: 16px 0; text-align: left; }
+.recentSearches header { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 13px; }
+.recentSearches header small { display: inline; font-size: 11px; opacity: .8; }
+.recentSearches header button, .suggestionStatus button { background: transparent; border: 0; color: var(--amber); min-height: 44px; cursor: pointer; }
+.recentSearches ul { display: flex; flex-wrap: wrap; gap: 8px; padding: 0; margin: 4px 0; list-style: none; }
+.recentSearches li { display: flex; align-items: center; max-width: 100%; border: 1px solid rgba(255,255,255,.18); border-radius: 24px; overflow: hidden; }
+.recentSearches li button { border: 0; background: transparent; color: inherit; min-height: 44px; cursor: pointer; }
+.recentSearchRepeat { padding: 8px 8px 8px 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recentSearchRemove { flex-shrink: 0; min-width: 44px; font-size: 21px; }
+.recentSearches button:focus-visible { outline: 2px solid var(--amber); outline-offset: -3px; }
+.recentSearches button:disabled { opacity: .5; cursor: wait; }
+.suggestionStatus { color: var(--muted); font-size: 13px; margin: 8px 0; }

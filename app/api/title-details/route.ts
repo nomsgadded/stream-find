@@ -76,7 +76,7 @@ export async function GET(request: Request) {
     if (!title) return Response.json({ error: "That title could not be found." }, { status: 404 });
 
     const date = details.release_date || details.first_air_date || "";
-    const regionalProviders = providers.results?.[region.code] ?? providers.results?.US;
+    const regionalProviders = providers.results?.[region.code];
     const providerLink = regionalProviders?.link;
     const offers = [
       ...providerOffers(regionalProviders?.flatrate, "included", providerLink),

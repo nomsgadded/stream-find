@@ -4,7 +4,7 @@ export function normalizedService(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9]/g, "")
     .replace(/^hbomax$/, "max").replace(/^amazonprimevideo$/, "primevideo")
     .replace(/^amazonvideo$/, "primevideo").replace(/^disneyplus$/, "disney")
-    .replace(/^appletvplus$/, "appletv");
+    .replace(/^appletvplus$/, "appletv").replace(/^(viki|vikipass)$/, "rakutenviki");
 }
 
 export function includedServiceIndex(provider: string, services: string[]) {

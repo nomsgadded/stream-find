@@ -66,6 +66,9 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
   const [title, setTitle] = useState<Title | null>(null);
   const [credits, setCredits] = useState<Credit[]>([]);
   const [seasons, setSeasons] = useState<Season[]>([]);
+  const [seasonStatus, setSeasonStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [seasonError, setSeasonError] = useState("");
+  const [seasonRetry, setSeasonRetry] = useState(0);
   const [similar, setSimilar] = useState<SimilarTitle[]>([]);
   const [selectedSeason, setSelectedSeason] = useState<number | null>(null);
   const [creditsExpanded, setCreditsExpanded] = useState(false);
@@ -85,7 +88,11 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
   const [tasteSignal, setTasteSignalState] = useState<TasteSignal | null>(null);
   const [watched, setWatched] = useState(false);
   const [toast, setToast] = useState("");
-  const sectionsRef = useRef<HTMLDetailsElement>(null);
+  const sectionsRef = useRef<HTMLButtonElement>(null);
+  const sectionSheetRef = useRef<HTMLDialogElement>(null);
+  const navPinnedUntil = useRef(0);
+  const [navHidden, setNavHidden] = useState(false);
+  const [sectionSheetOpen, setSectionSheetOpen] = useState(false);
   const desktopSectionsRef = useRef<HTMLElement>(null);
   const [activeSectionId, setActiveSectionId] = useState("title-overview");
   const [railEdges, setRailEdges] = useState({ left: false, right: false });
@@ -94,12 +101,21 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
   useEffect(() => {
     if (status !== "ready") return;
     let frame = 0;
+    let lastY = Math.max(0, window.scrollY);
     const update = () => {
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
-        // Use the collapsed row height so opening the menu does not change the active section.
-        const dockTop = (window.innerWidth <= 700 ? sectionsRef.current : desktopSectionsRef.current)?.getBoundingClientRect().top ?? 148;
-        const dockBottom = dockTop + (window.innerWidth <= 700 ? 42 : 44);
+        const y = Math.max(0, Math.min(window.scrollY, document.documentElement.scrollHeight - window.innerHeight));
+        const delta = y - lastY;
+        if (y < 80 || sectionSheetRef.current?.open || performance.now() < navPinnedUntil.current) {
+          setNavHidden(false);
+          lastY = y;
+        } else if (Math.abs(delta) >= 6) {
+          setNavHidden(delta > 0);
+          lastY = y;
+        }
+        // Keep scroll-spy independent of the nav's hide/reveal transform.
+        const dockBottom = window.innerWidth <= 700 ? 170 : 192;
         let current = "title-overview";
         for (const heading of document.querySelectorAll<HTMLElement>(".titlePageBody h2[id]")) {
           if (heading.getBoundingClientRect().top <= dockBottom + 24) current = heading.id;
@@ -110,8 +126,26 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
     update();
     window.addEventListener("scroll", update, { passive: true });
     window.addEventListener("resize", update);
-    return () => { window.cancelAnimationFrame(frame); window.removeEventListener("scroll", update); window.removeEventListener("resize", update); };
+    const revealForKeyboard = (event: KeyboardEvent) => {
+      if (event.key === "Tab") setNavHidden(false);
+    };
+    window.addEventListener("keydown", revealForKeyboard);
+    return () => { window.cancelAnimationFrame(frame); window.removeEventListener("scroll", update); window.removeEventListener("resize", update); window.removeEventListener("keydown", revealForKeyboard); };
   }, [status, titleKey, credits.length, seasons.length, similar.length]);
+
+  useEffect(() => {
+    if (!sectionSheetOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const closeOnDesktop = () => {
+      if (window.innerWidth > 700) sectionSheetRef.current?.close();
+    };
+    window.addEventListener("resize", closeOnDesktop);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("resize", closeOnDesktop);
+    };
+  }, [sectionSheetOpen]);
 
   useEffect(() => {
     if (status !== "ready") return;
@@ -179,6 +213,7 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
       setTitle(preview);
       setCredits([]);
       setSeasons([]);
+      setSelectedSeason(null);
       setSimilar([]);
       setStatus(preview ? "ready" : "loading");
       setError("");
@@ -211,19 +246,12 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
         setStatus("ready");
         void Promise.allSettled([
           fetch(`/api/cast?id=${resolvedWatchmodeId}&v=2`, { signal: controller.signal }).then((result) => result.ok ? result.json() as Promise<{ credits?: Credit[] }> : { credits: [] }),
-          loadedTitle.mediaType === "show"
-            ? fetch(`/api/seasons?id=${resolvedWatchmodeId}&region=${region}`, { signal: controller.signal }).then((result) => result.ok ? result.json() as Promise<{ seasons?: Season[] }> : { seasons: [] })
-            : Promise.resolve({ seasons: [] as Season[] }),
           loadedTitle.similarTitleIds?.length
             ? fetch(`/api/similar?ids=${loadedTitle.similarTitleIds.slice(0, 6).join(",")}`, { signal: controller.signal }).then((result) => result.ok ? result.json() as Promise<{ titles?: SimilarTitle[] }> : { titles: [] })
             : Promise.resolve({ titles: [] as SimilarTitle[] }),
-        ]).then(([credits, seasons, similar]) => {
+        ]).then(([credits, similar]) => {
           if (controller.signal.aborted) return;
           if (credits.status === "fulfilled") setCredits(credits.value.credits ?? []);
-          if (seasons.status === "fulfilled") {
-            setSeasons(seasons.value.seasons ?? []);
-            setSelectedSeason(seasons.value.seasons?.[0]?.seasonNumber ?? null);
-          }
           if (similar.status === "fulfilled") setSimilar(similar.value.titles ?? []);
         });
       }
@@ -238,6 +266,38 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
       controller.abort();
     };
   }, [region, route, titleKey]);
+
+  useEffect(() => {
+    if (!title || title.mediaType !== "show") return;
+    const controller = new AbortController();
+    const frame = requestAnimationFrame(() => { setSeasonStatus("loading"); setSeasonError(""); });
+    void (async () => {
+      const identity = title.watchmodeId ? `id=${title.watchmodeId}` : title.tmdbId ? `tmdbId=${title.tmdbId}` : null;
+      if (!identity) throw new Error("Season availability is not listed for this series yet.");
+      const response = await fetch(`/api/seasons?${identity}&region=${region}`, { signal: controller.signal });
+      const data = await response.json() as { seasons?: Season[]; error?: string };
+      if (!response.ok) throw new Error(data.error || "Season availability is temporarily unavailable.");
+      if (!Array.isArray(data.seasons)) throw new Error("Season availability is temporarily unavailable.");
+      if (controller.signal.aborted) return;
+      cancelAnimationFrame(frame);
+      const coverage = data.seasons;
+      setSeasons((metadata) => {
+        const merged = new Map(metadata.map((season) => [season.seasonNumber, { ...season, providers: [], availableEpisodeCount: 0 }] as [number, Season]));
+        for (const season of coverage) {
+          const existing = merged.get(season.seasonNumber);
+          merged.set(season.seasonNumber, { ...existing, ...season, episodeCount: Math.max(existing?.episodeCount ?? 0, season.episodeCount) });
+        }
+        return [...merged.values()].sort((a, b) => a.seasonNumber - b.seasonNumber);
+      });
+      setSeasonStatus("ready");
+    })().catch((caught) => {
+      if (controller.signal.aborted) return;
+      cancelAnimationFrame(frame);
+      setSeasonError(caught instanceof Error ? caught.message : "Season availability is temporarily unavailable.");
+      setSeasonStatus("error");
+    });
+    return () => { cancelAnimationFrame(frame); controller.abort(); };
+  }, [title, region, seasonRetry]);
 
   useEffect(() => {
     if (!title) return;
@@ -448,13 +508,13 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
     { id: "about-title", label: "About" },
     { id: "watch-title", label: "Where to watch" },
     ...(trailerEmbed ? [{ id: "trailer-title", label: "Trailer" }] : []),
-    ...(title.mediaType === "show" && seasons.length ? [{ id: "seasons-title", label: "Episodes" }] : []),
+    ...(title.mediaType === "show" ? [{ id: "seasons-title", label: "Episodes" }] : []),
     ...(credits.length ? [{ id: "credits-title", label: "Cast and creators" }] : []),
     ...(similar.length ? [{ id: "similar-title", label: "More like this" }] : []),
   ];
 
   return (
-    <main className="titlePage">
+    <main className="titlePage" data-nav-hidden={navHidden ? "true" : undefined} onFocusCapture={() => setNavHidden(false)}>
       <TitleGlobalHeader accountUser={accountUser} />
       <div className="titleActionBar">
         <button type="button" onClick={goBack} aria-label="Return to the previous page or Discover">← Back</button>
@@ -463,10 +523,30 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
           <button className={saved ? "saved" : ""} type="button" aria-pressed={saved} onClick={() => void toggleWatchlist()}>{saved ? "✓ Saved" : "+ Watchlist"}</button>
         </div>
       </div>
-      <details className="titleSectionDock" ref={sectionsRef}>
-        <summary aria-label={`Current section: ${activeSection}. Open section navigation`}><span>{activeSection}</span><svg className="titleSectionChevron" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false"><path d="m4.5 7.5 5.5 5 5.5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg></summary>
-        <nav aria-label="Jump to a title section">{jumpLinks.map((link) => <a href={`#${link.id}`} key={link.id} onClick={() => sectionsRef.current?.removeAttribute("open")}>{link.label}<span aria-hidden="true">→</span></a>)}</nav>
-      </details>
+      <button className="titleSectionDock titleSectionTrigger" ref={sectionsRef} type="button" aria-label={`Current section: ${activeSection}. Open section navigation`} aria-haspopup="dialog" aria-expanded={sectionSheetOpen} aria-controls="title-section-sheet" onClick={() => { setNavHidden(false); sectionSheetRef.current?.showModal(); setSectionSheetOpen(true); }}>
+        <span>{activeSection}</span><svg className="titleSectionChevron" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false"><path d="m4.5 7.5 5.5 5 5.5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      </button>
+      <dialog className="titleSectionSheet" id="title-section-sheet" ref={sectionSheetRef} aria-labelledby="title-section-sheet-heading" onClose={() => { setSectionSheetOpen(false); setNavHidden(false); sectionsRef.current?.focus({ preventScroll: true }); }} onClick={(event) => { if (event.target === event.currentTarget) event.currentTarget.close(); }}>
+        <div className="titleSectionSheetPanel">
+          <header><div><p>{title.title}</p><h2 id="title-section-sheet-heading">Jump to section</h2></div><button type="button" autoFocus onClick={() => sectionSheetRef.current?.close()}>Close</button></header>
+          <nav aria-label="Jump to a title section">{jumpLinks.map((link) => <a href={`#${link.id}`} key={link.id} aria-current={activeSectionId === link.id ? "location" : undefined} onClick={(event) => {
+            event.preventDefault();
+            sectionSheetRef.current?.close();
+            setSectionSheetOpen(false);
+            setNavHidden(false);
+            navPinnedUntil.current = performance.now() + 1000;
+            const target = document.getElementById(link.id);
+            if (!target) return;
+            history.replaceState(history.state, "", `#${link.id}`);
+            requestAnimationFrame(() => {
+              const top = target.getBoundingClientRect().top + window.scrollY - 190;
+              window.scrollTo({ top: Math.max(0, top), behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+              target.setAttribute("tabindex", "-1");
+              target.focus({ preventScroll: true });
+            });
+          }}>{link.label}<span aria-hidden="true">{activeSectionId === link.id ? "✓" : ""}</span></a>)}</nav>
+        </div>
+      </dialog>
       <div className={`titleSectionDesktopNav${railEdges.left ? " hasMoreLeft" : ""}${railEdges.right ? " hasMoreRight" : ""}`}>
         <nav ref={desktopSectionsRef} aria-label="Jump to a title section">
           {jumpLinks.map((link) => <a href={`#${link.id}`} key={link.id} aria-current={activeSectionId === link.id ? "location" : undefined}>{link.label}</a>)}
@@ -544,24 +624,27 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
           </section>
         )}
 
-        {title.mediaType === "show" && seasons.length > 0 && (
+        {title.mediaType === "show" && (
           <section className="titlePageSection" aria-labelledby="seasons-title">
-            <div className="titleSectionHeading"><div><p className="sectionKicker">Episode guide</p><h2 id="seasons-title">Season availability</h2></div><span>{seasons.length} seasons</span></div>
-            <div className="titleSeasonTabs" role="tablist" aria-label="Seasons">{seasons.map((season) => <button type="button" role="tab" aria-selected={activeSeason?.seasonNumber === season.seasonNumber} className={activeSeason?.seasonNumber === season.seasonNumber ? "active" : ""} onClick={() => setSelectedSeason(season.seasonNumber)} key={season.seasonNumber}>Season {season.seasonNumber}</button>)}</div>
-            {activeSeason && <div className="titleSeasonPanel"><div>{activeSeason.posterUrl && <Image src={activeSeason.posterUrl} alt="" width={64} height={96} unoptimized loading="lazy" />}<div><strong>{activeSeason.name || `Season ${activeSeason.seasonNumber}`}</strong><p>{activeSeason.episodeCount} episodes{activeSeason.airDate ? ` · ${formatDate(activeSeason.airDate)}` : ""}</p></div></div>{activeSeason.providers?.length ? <div className="titleSeasonProviders">{activeSeason.providers.slice(0, 5).map((provider) => <span key={`${provider.provider}-${provider.type}`}><strong>{provider.provider}</strong><small>{provider.episodeCount} episodes · {accessLabel(provider)}</small></span>)}</div> : <p>Episode-level providers are not listed for this season yet.</p>}</div>}
+            <div className="titleSectionHeading"><div><p className="sectionKicker">Episode guide</p><h2 id="seasons-title">Season availability</h2></div>{seasons.length > 0 && <span>{seasons.length} {seasons.length === 1 ? "season" : "seasons"}</span>}</div>
+            <p className="seasonAvailabilityStatus" role="status">{seasonStatus === "loading" ? `Checking season availability in ${region}…` : seasonStatus === "error" ? seasonError : seasons.length ? `Episode availability listed for ${region}. Coverage may be partial.` : "Season availability is not listed for this series yet."}</p>
+            {seasonStatus === "error" && <button className="titleCreditsExpand" type="button" onClick={() => setSeasonRetry((current) => current + 1)}>Retry availability</button>}
+            <div className="titleSeasonTabs" role="group" aria-label="Select a season">{seasons.map((season) => <button type="button" aria-pressed={activeSeason?.seasonNumber === season.seasonNumber} className={activeSeason?.seasonNumber === season.seasonNumber ? "active" : ""} onClick={() => setSelectedSeason(season.seasonNumber)} key={season.seasonNumber}>Season {season.seasonNumber}</button>)}</div>
+            {activeSeason && <div className="titleSeasonPanel"><div>{activeSeason.posterUrl && <Image src={activeSeason.posterUrl} alt="" width={64} height={96} unoptimized loading="lazy" />}<div><strong>{activeSeason.name || `Season ${activeSeason.seasonNumber}`}</strong><p>{activeSeason.episodeCount} episodes{activeSeason.airDate ? ` · ${formatDate(activeSeason.airDate)}` : ""}</p></div></div>{seasonStatus === "ready" && (activeSeason.providers?.length ? <div className="titleSeasonProviders">{activeSeason.providers.map((provider) => <span key={`${provider.provider}-${provider.type}`}><strong>{provider.provider}</strong><small>{provider.episodeCount} of {activeSeason.episodeCount} episodes listed · {accessLabel(provider)}</small></span>)}</div> : <p>No episode-level provider listings for this season in {region}. This does not confirm the season is unavailable.</p>)}</div>}
           </section>
         )}
 
         {credits.length > 0 && (
           <section className="titlePageSection" aria-labelledby="credits-title">
-            <div className="titleSectionHeading"><div><p className="sectionKicker">People</p><h2 id="credits-title">Cast and creators</h2></div>{credits.length > 6 && <button type="button" onClick={() => setCreditsExpanded((current) => !current)}>{creditsExpanded ? "Show less" : `View ${credits.length - 6} more`}</button>}</div>
-            <div className="titleCreditsGrid">{visibleCredits.map((credit) => {
+            <div className="titleSectionHeading"><div><p className="sectionKicker">People</p><h2 id="credits-title">Cast and creators</h2></div></div>
+            <div className="titleCreditsGrid" id="title-credits-list">{visibleCredits.map((credit) => {
               const path = personPath(credit);
               const content = <><span className={credit.photoUrl ? "hasPhoto" : ""}>{credit.photoUrl ? <Image src={credit.photoUrl} alt="" width={52} height={52} unoptimized loading="lazy" /> : initials(credit.name)}</span><div><strong>{credit.name}</strong><small>{credit.role}</small><em>View profile →</em></div></>;
               return path
                 ? <button type="button" onClick={() => router.push(path)} key={`${credit.type}-${credit.personId}-${credit.role}`}>{content}</button>
                 : <article key={`${credit.type}-${credit.personId}-${credit.role}`}>{content}</article>;
             })}</div>
+            {credits.length > 6 && <button className="titleCreditsExpand" type="button" aria-expanded={creditsExpanded} aria-controls="title-credits-list" onClick={() => setCreditsExpanded((current) => !current)}>{creditsExpanded ? "Show less" : `View ${credits.length - 6} more`}</button>}
           </section>
         )}
 
@@ -576,7 +659,7 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
         )}
       </div>
 
-      <footer className="titlePageFooter"><Link className="brand" href="/"><span className="brandMark" aria-hidden="true"><span /></span><span>Stream Find</span></Link><p>Availability by Watchmode · Metadata by TMDB</p></footer>
+      <footer className="titlePageFooter"><Link className="brand" href="/"><span className="brandMark" aria-hidden="true"><span /></span><span>Stream Find</span></Link><p>Availability by Watchmode · <a href="https://www.justwatch.com/" target="_blank" rel="noreferrer">Additional availability by JustWatch via TMDB</a></p></footer>
       {recommendOpen && <RecommendDialog
         user={accountUser}
         friends={friends}

@@ -1,6 +1,8 @@
 "use client";
 
 import ModalDialog from "@/components/ModalDialog";
+import RecentSearches from "@/components/RecentSearches";
+import { rememberSearch } from "@/lib/recent-searches";
 
 import ProviderLogo, { providerBrand, providerHost } from "@/components/ProviderLogo";
 import { useRouter } from "next/navigation";
@@ -14,10 +16,12 @@ import PlatformHighlights from "@/components/PlatformHighlights";
 import SearchRouteSync from "@/components/SearchRouteSync";
 import { HeaderSearchButton } from "@/components/GlobalSearch";
 import { firebaseAuth, firestore } from "@/lib/firebase";
-import { bestOffer, compareOffers, offerPriority } from "@/lib/offer-priority";
+import { bestOffer, compareOffers, includedServiceIndex, offerPriority } from "@/lib/offer-priority";
 import { regions } from "@/lib/regions";
 import { titlePath } from "@/lib/title-routes";
 import { rememberTitleNavigation } from "@/lib/title-navigation";
+import { searchMatchScore } from "@/lib/search-matching";
+import { suggestionAvailabilityLabel, type SuggestionOffer } from "@/lib/search-suggestion-label";
 import { resolveTitleArtwork } from "@/lib/title-artwork";
 
 type OfferType = "included" | "free" | "rent" | "buy";
@@ -48,6 +52,8 @@ type Title = {
   posterUrl?: string;
   offers: Offer[];
   live?: boolean;
+  availabilityKnown?: boolean;
+  corrected?: boolean;
   networkNames?: string[];
   popularityPercentile?: number;
   reviewSummary?: string;
@@ -73,6 +79,9 @@ type AutocompleteResult = {
   year?: number;
   mediaType: MediaType;
   imageUrl?: string;
+  availability?: SuggestionOffer[];
+  tmdbId?: number;
+  corrected?: boolean;
 };
 
 type AutocompleteResponse = {
@@ -584,6 +593,9 @@ export default function Home() {
   const [hydrated, setHydrated] = useState(false);
   const [autocompleteResults, setAutocompleteResults] = useState<AutocompleteResult[]>([]);
   const [autocompleteOpen, setAutocompleteOpen] = useState(false);
+  const [suggestionStatus, setSuggestionStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [suggestionRetry, setSuggestionRetry] = useState(0);
+  const [myServicesOnly, setMyServicesOnly] = useState(false);
   const [autocompleteIndex, setAutocompleteIndex] = useState(-1);
   const [creditsByTitle, setCreditsByTitle] = useState<Record<number, Credit[]>>({});
   const [creditsLoadingId, setCreditsLoadingId] = useState<number | null>(null);
@@ -625,7 +637,8 @@ export default function Home() {
   const [settingsLoadedUserId, setSettingsLoadedUserId] = useState<string | null>(null);
   const searchController = useRef<AbortController | null>(null);
   const autocompleteController = useRef<AbortController | null>(null);
-  const autocompleteCache = useRef(new Map<string, AutocompleteResult[]>());
+  const autocompleteCache = useRef(new Map<string, { expires: number; results: AutocompleteResult[] }>());
+  const dismissedSuggestionQuery = useRef<string | null>(null);
   const creditsCache = useRef(new Map<number, Credit[]>());
   const similarCache = useRef(new Map<number, SimilarTitle[]>());
   const seasonsCache = useRef(new Map<string, SeasonAvailability[]>());
@@ -971,6 +984,7 @@ export default function Home() {
 
   useEffect(() => {
     const normalized = query.trim();
+    autocompleteController.current?.abort();
 
     if (searchMode === "music") {
       autocompleteController.current?.abort();
@@ -982,41 +996,47 @@ export default function Home() {
       return;
     }
 
-    const cacheKey = normalized.toLowerCase();
+    const cacheKey = `${country}:${normalized.toLowerCase()}:v3`;
     const timer = window.setTimeout(() => {
+      if (dismissedSuggestionQuery.current === normalized) return;
       const cached = autocompleteCache.current.get(cacheKey);
-      if (cached) {
-        setAutocompleteResults(cached);
-        setAutocompleteOpen(cached.length > 0);
+      if (cached && cached.expires > Date.now()) {
+        setSuggestionStatus("ready");
+        setAutocompleteResults(cached.results);
+        setAutocompleteOpen(cached.results.length > 0);
         return;
       }
 
       autocompleteController.current?.abort();
       const controller = new AbortController();
       autocompleteController.current = controller;
+      setSuggestionStatus("loading");
 
-      void fetch(`/api/autocomplete?q=${encodeURIComponent(normalized)}`, { signal: controller.signal })
+      void fetch(`/api/autocomplete?q=${encodeURIComponent(normalized)}&region=${country}&v=3`, { signal: controller.signal })
         .then(async (response) => {
-          if (!response.ok) return { results: [] } as AutocompleteResponse;
+          if (!response.ok) throw new Error("Suggestions unavailable");
           return response.json() as Promise<AutocompleteResponse>;
         })
         .then((data) => {
           if (controller.signal.aborted) return;
+          setSuggestionStatus("ready");
           const results = data.results ?? [];
-          autocompleteCache.current.set(cacheKey, results);
+          autocompleteCache.current.set(cacheKey, { expires: Date.now() + 300_000, results });
+          while (autocompleteCache.current.size > 50) autocompleteCache.current.delete(autocompleteCache.current.keys().next().value!);
           setAutocompleteResults(results);
           setAutocompleteOpen(results.length > 0);
         })
         .catch(() => {
           if (!controller.signal.aborted) {
+            setSuggestionStatus("error");
             setAutocompleteResults([]);
             setAutocompleteOpen(false);
           }
         });
     }, autocompleteCache.current.has(cacheKey) ? 0 : 450);
 
-    return () => window.clearTimeout(timer);
-  }, [liveStatus, query, searchMode, submittedQuery]);
+    return () => { window.clearTimeout(timer); autocompleteController.current?.abort(); };
+  }, [country, liveStatus, query, searchMode, submittedQuery, suggestionRetry]);
 
   useEffect(() => () => {
     searchController.current?.abort();
@@ -1060,17 +1080,14 @@ export default function Home() {
         if (mediaFilter !== "all" && title.mediaType !== mediaFilter) return false;
         if (accessFilter !== "all" && !title.offers.some((offer) => offer.type === accessFilter)) return false;
         if (providerFilter && !title.offers.some((offer) => offer.provider === providerFilter)) return false;
+        if (myServicesOnly && !title.offers.some((offer) => includedServiceIndex(offer.provider, savedServices) >= 0 && (offer.type === "included" || offer.type === "free"))) return false;
         if (!normalized || title.live) return true;
         const haystack = `${title.title} ${title.year} ${title.genres.join(" ")} ${title.mediaType}`.toLowerCase();
         return haystack.includes(normalized);
       })
       .sort((a, b) => {
         if (normalized && activeView !== "watchlist") {
-          const relevance = (title: string) => {
-            const value = title.toLowerCase();
-            return value === normalized ? 0 : value.startsWith(normalized) ? 1 : value.includes(normalized) ? 2 : 3;
-          };
-          const titleDifference = relevance(a.title) - relevance(b.title);
+          const titleDifference = searchMatchScore(a.title, submittedQuery, a.year) - searchMatchScore(b.title, submittedQuery, b.year);
           if (titleDifference) return titleDifference;
         }
         const aOffer = bestOffer(a.offers, savedServices);
@@ -1079,7 +1096,7 @@ export default function Home() {
           - (bOffer ? offerPriority(bOffer, savedServices) : 9);
         return accessDifference || b.score - a.score || a.title.localeCompare(b.title);
       });
-  }, [accessFilter, activeView, mediaFilter, providerFilter, savedServices, sourceTitles, submittedQuery, watchlist, watchedIds]);
+  }, [accessFilter, activeView, mediaFilter, myServicesOnly, providerFilter, savedServices, sourceTitles, submittedQuery, watchlist, watchedIds]);
 
   const filteredMusicVideos = useMemo(() => musicVideos.filter((video) => {
     if (musicFilter === "all") return true;
@@ -1195,6 +1212,7 @@ export default function Home() {
     setAutocompleteOpen(false);
     setAutocompleteResults([]);
     setAutocompleteIndex(-1);
+    setSuggestionStatus("idle");
   };
 
   const loadTitleExtras = (title: Title) => {
@@ -1258,6 +1276,7 @@ export default function Home() {
     setProviderFilter(null);
     setMediaFilter("all");
     setAccessFilter("all");
+    setMyServicesOnly(false);
     setLiveResults([]);
     setNextSearchPage(null);
     setMoreSearchLoading(false);
@@ -1274,6 +1293,7 @@ export default function Home() {
     const controller = new AbortController();
     searchController.current = controller;
     setLiveStatus("loading");
+    rememberSearch(trimmed, "screen");
 
     try {
       const params = new URLSearchParams({ q: trimmed });
@@ -1328,12 +1348,14 @@ export default function Home() {
     const controller = new AbortController();
     searchController.current = controller;
     setMusicStatus("loading");
+    rememberSearch(trimmed, "music");
 
     try {
       const params = new URLSearchParams({ q: trimmed, region: country });
       const response = await fetch(`/api/music-videos?${params.toString()}`, { signal: controller.signal });
       const data = await response.json() as MusicVideoResponse;
       if (!response.ok) throw new Error(data.error || "Music video search could not finish.");
+      if (controller.signal.aborted) return;
       setMusicVideos(data.videos ?? []);
       setMusicStatus("ready");
     } catch (error) {
@@ -1372,6 +1394,7 @@ export default function Home() {
 
   const submitSearch = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (query.trim().length < 3 || (searchMode === "music" ? musicStatus : liveStatus) === "loading") return;
     event.currentTarget.querySelector<HTMLInputElement>('input[type="search"]')?.blur();
     if (searchMode === "music") void runMusicSearch(query);
     else {
@@ -1380,22 +1403,30 @@ export default function Home() {
     }
   };
 
-  const chooseSuggestion = (title: string, watchmodeId?: number) => {
-    const path = watchmodeId ? titlePath({ title, watchmodeId }) : null;
+  const chooseSuggestion = (title: string, watchmodeId?: number, tmdbId?: number, mediaType?: MediaType) => {
+    rememberSearch(title, "screen");
+    const path = titlePath({ title, watchmodeId: watchmodeId && watchmodeId > 0 ? watchmodeId : undefined, tmdbId, mediaType });
     if (path) { rememberTitleNavigation(path); router.push(path); }
     else void runLiveSearch(title);
   };
 
   const handleSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Escape") {
+      dismissedSuggestionQuery.current = query.trim();
+      autocompleteController.current?.abort();
       setAutocompleteOpen(false);
       setAutocompleteIndex(-1);
+      setSuggestionStatus("idle");
       return;
     }
 
     if (!autocompleteOpen || !autocompleteResults.length) return;
 
-    if (event.key === "ArrowDown") {
+    if (event.key === "Enter" && autocompleteIndex >= 0) {
+      event.preventDefault();
+      const selected = autocompleteResults[autocompleteIndex];
+      chooseSuggestion(selected.title, selected.id, selected.tmdbId, selected.mediaType);
+    } else if (event.key === "ArrowDown") {
       event.preventDefault();
       setAutocompleteIndex((current) => (current + 1) % autocompleteResults.length);
     } else if (event.key === "ArrowUp") {
@@ -1403,6 +1434,10 @@ export default function Home() {
       setAutocompleteIndex((current) => current <= 0 ? autocompleteResults.length - 1 : current - 1);
     }
   };
+
+  useEffect(() => {
+    if (autocompleteIndex >= 0) document.getElementById(`title-suggestion-${autocompleteResults[autocompleteIndex]?.id}`)?.scrollIntoView({ block: "nearest" });
+  }, [autocompleteIndex, autocompleteResults]);
 
   const openTitle = (title: Title) => {
     if (title.live && (title.region ?? "US") !== country) {
@@ -1503,6 +1538,7 @@ export default function Home() {
   };
 
   const clearFilters = () => {
+    setMyServicesOnly(false);
     searchController.current?.abort();
     closeAutocomplete();
     setQuery("");
@@ -1677,12 +1713,18 @@ export default function Home() {
                 data-testid="title-search"
                 type="search"
                 enterKeyHint="search"
+                maxLength={80}
                 placeholder={searchMode === "music" ? "Search artist, song, or music video" : "Search movies and shows"}
                 value={query}
                 onChange={(event) => {
                   const nextQuery = event.target.value;
+                  dismissedSuggestionQuery.current = null;
+                  autocompleteController.current?.abort();
                   setQuery(nextQuery);
+                  setSuggestionStatus("idle");
                   setAutocompleteIndex(-1);
+                  setAutocompleteResults([]);
+                  setAutocompleteOpen(false);
                   if (nextQuery.trim().length < 3) {
                     autocompleteController.current?.abort();
                     setAutocompleteResults([]);
@@ -1698,11 +1740,25 @@ export default function Home() {
                 aria-expanded={searchMode === "screen" ? autocompleteOpen : undefined}
                 aria-activedescendant={searchMode === "screen" && autocompleteIndex >= 0 ? `title-suggestion-${autocompleteResults[autocompleteIndex]?.id}` : undefined}
               />
-              <button type="submit" disabled={searchMode === "music" ? musicStatus === "loading" : liveStatus === "loading"}>
+              {query.length > 0 && <button className="searchClear" type="button" aria-label="Clear search" onPointerDown={(event) => event.preventDefault()} onClick={() => {
+                autocompleteController.current?.abort();
+                setQuery("");
+                setSuggestionStatus("idle");
+                setAutocompleteResults([]);
+                setAutocompleteOpen(false);
+                setAutocompleteIndex(-1);
+                searchInputRef.current?.focus();
+              }}>×</button>}
+              <button type="submit" aria-label={searchMode === "music" ? "Search music videos" : "Search movies and shows"} disabled={query.trim().length < 3 || (searchMode === "music" ? musicStatus : liveStatus) === "loading"}>
                 <span className="searchButtonLabel">{(searchMode === "music" ? musicStatus : liveStatus) === "loading" ? "Searching" : "Search"}</span>
                 <ArrowIcon />
               </button>
             </form>
+            {query.trim().length > 0 && query.trim().length < 3 && <p className="suggestionStatus" role="status">Enter at least 3 characters to search.</p>}
+            {autocompleteOpen && autocompleteResults.length > 0 && <p className="srOnly" role="status">{autocompleteResults.length} title suggestions. Use arrow keys to select a title, then Enter to open it. Press Enter without selecting to search all matches.</p>}
+            {searchMode === "screen" && query.trim().length >= 3 && query.trim() !== submittedQuery && liveStatus !== "loading" && (suggestionStatus === "loading" || suggestionStatus === "error" || (suggestionStatus === "ready" && !autocompleteResults.length)) && <p className="suggestionStatus" role="status">
+              {suggestionStatus === "loading" ? "Finding titles…" : suggestionStatus === "error" ? <>Suggestions couldn’t load. <button type="button" onClick={() => setSuggestionRetry((value) => value + 1)}>Retry</button> or press Enter to search.</> : "No suggestions found. Press Enter to search all matches, or check the spelling."}
+            </p>}
             {searchMode === "screen" && autocompleteOpen && (
               <div className="autocompletePanel" id="title-search-suggestions" role="listbox" aria-label="Movie and show suggestions">
                 {autocompleteResults.map((result, index) => (
@@ -1716,9 +1772,8 @@ export default function Home() {
                     onMouseEnter={() => setAutocompleteIndex(index)}
                     onPointerDown={(event) => {
                       event.preventDefault();
-                      chooseSuggestion(result.title, result.id);
                     }}
-                    onClick={() => chooseSuggestion(result.title, result.id)}
+                    onClick={() => chooseSuggestion(result.title, result.id, result.tmdbId, result.mediaType)}
                   >
                     <span
                       className="autocompleteArtwork"
@@ -1730,6 +1785,8 @@ export default function Home() {
                     <span className="autocompleteCopy">
                       <strong>{result.title}</strong>
                       <span>{[result.year, result.mediaType === "movie" ? "Movie" : "Series"].filter(Boolean).join(" · ")}</span>
+                      {result.corrected && <small>Similar title</small>}
+                      {suggestionAvailabilityLabel(result.availability, savedServices) && <small className="suggestionAvailability">{suggestionAvailabilityLabel(result.availability, savedServices)}</small>}
                     </span>
                     <ArrowIcon />
                   </button>
@@ -1737,6 +1794,10 @@ export default function Home() {
               </div>
             )}
           </div>
+          {!query.trim() && <RecentSearches mode={searchMode} disabled={(searchMode === "music" ? musicStatus : liveStatus) === "loading"} onSelect={(value) => {
+            if (searchMode === "music") void runMusicSearch(value);
+            else { void runLiveSearch(value); router.push(`/?q=${encodeURIComponent(value)}`, { scroll: false }); }
+          }} />}
           <div className="searchHints" aria-label="Popular searches">
             <span>Try</span>
             {(searchMode === "music" ? ["Beyoncé", "The Weeknd", "Bad Bunny"] : ["Dune: Part Two", "Shōgun", "The Bear"]).map((title) => (
@@ -1997,7 +2058,7 @@ export default function Home() {
                     <span className="emptyMark" aria-hidden="true">▶</span>
                     <h3>Music video search could not finish</h3>
                     <p>{musicError}</p>
-                    <button type="button" onClick={() => void runMusicSearch(query)}>Try again</button>
+                    <button type="button" onClick={() => void runMusicSearch(submittedQuery)}>Try again</button>
                   </div>
                 ) : filteredMusicVideos.length > 0 ? (
                   <div className="musicVideoGrid">
@@ -2038,6 +2099,7 @@ export default function Home() {
                     {type === "all" ? "All titles" : type === "movie" ? "Movies" : "TV shows"}
                   </button>
                 ))}
+                <button type="button" className={myServicesOnly ? "active" : ""} aria-pressed={myServicesOnly} disabled={!savedServices.length} onClick={() => setMyServicesOnly((value) => !value)}>My services</button>
               </div>
               <div className="accessFilters" aria-label="Availability type">
                 {accessOptions.map((option) => (
@@ -2060,6 +2122,7 @@ export default function Home() {
                 <span className="liveDot" /> Availability data by Watchmode
               </a>
             )}
+            {submittedQuery && <a className="liveAttribution" href="https://www.justwatch.com/" target="_blank" rel="noreferrer">Additional availability by JustWatch via TMDB</a>}
 
             <p className="resultCount" aria-live="polite">
               {liveStatus === "loading" ? "Searching live sources…" : `${filteredTitles.length} ${filteredTitles.length === 1 ? "title" : "titles"}`}
@@ -2075,8 +2138,8 @@ export default function Home() {
               <div className="emptyState errorState">
                 <span className="emptyMark" aria-hidden="true"><SearchIcon /></span>
                 <h3>Live search could not finish</h3>
-                <p>Check the title and try again in a moment.</p>
-                <button type="button" onClick={() => void runLiveSearch(query)}>Try again</button>
+                <p>Your search could not be completed. Try again in a moment.</p>
+                <button type="button" onClick={() => void runLiveSearch(submittedQuery)}>Try again</button>
               </div>
             ) : filteredTitles.length > 0 ? (
               <div className="titleGrid">
@@ -2091,7 +2154,7 @@ export default function Home() {
                         <button className={`saveButton ${saved ? "saved" : ""}`} data-testid={`save-${item.id}`} type="button" aria-pressed={saved} aria-label={`${saved ? "Remove" : "Save"} ${item.title} ${saved ? "from" : "to"} watchlist`} onClick={() => toggleWatchlist(item)}><BookmarkIcon filled={saved} /></button>
                         <button className="posterButton" type="button" onClick={() => openTitle(item)} aria-label={`See all watch options for ${item.title}`} />
                         <div className="posterShade" aria-hidden="true" />
-                        <div className="posterCopy"><p>{item.year} · {item.mediaType === "movie" ? "Film" : "Series"} · {item.runtime}</p><h3>{item.title}</h3></div>
+                        <div className="posterCopy"><p>{item.year || "Year unknown"} · {item.mediaType === "movie" ? "Film" : "Series"} · {item.runtime}</p><h3>{item.title}</h3></div>
                       </div>
                       {offer && provider ? (
                         <button className="watchRow" type="button" onClick={() => openTitle(item)} aria-label={`Compare watch options for ${item.title}`}>
@@ -2102,7 +2165,7 @@ export default function Home() {
                       ) : (
                         <button className="watchRow releasePendingRow" type="button" onClick={() => openTitle(item)} aria-label={`View details for ${item.title}`}>
                           <span className="releaseBadge" aria-hidden="true"><BellIcon /></span>
-                          <span className="watchCopy"><small>No streaming options listed in {country}</small><strong>View title details</strong></span>
+                          <span className="watchCopy"><small>{item.availabilityKnown === false ? "Availability hasn’t been verified" : `No streaming options listed in ${country}`}</small><strong>{item.availabilityKnown === false ? "Check availability" : "View title details"}</strong></span>
                           <ArrowIcon />
                         </button>
                       )}
@@ -2113,9 +2176,13 @@ export default function Home() {
             ) : (
               <div className="emptyState">
                 <span className="emptyMark" aria-hidden="true"><SearchIcon /></span>
-                <h3>{activeView === "watchlist" ? "Your watchlist is ready for its first title" : "No matching titles found"}</h3>
-                <p>{activeView === "watchlist" ? "Save something from Discover and it will stay here on this device." : "Try a more specific title, or search another movie or show."}</p>
-                <button type="button" onClick={clearFilters}>{activeView === "watchlist" ? "Explore titles" : "Clear filters"}</button>
+                <h3>{activeView === "watchlist" ? "Your watchlist is ready for its first title" : sourceTitles.length ? "No titles match these filters" : "No matching titles found"}</h3>
+                <p>{activeView === "watchlist" ? "Save something from Discover and it will stay here on this device." : sourceTitles.length ? "Try removing filters to see more results." : "Check the spelling, remove the year, or try a shorter title."}</p>
+                <button type="button" onClick={() => {
+                  if (activeView === "watchlist") clearFilters();
+                  else if (sourceTitles.length) { setMediaFilter("all"); setAccessFilter("all"); setProviderFilter(null); setMyServicesOnly(false); }
+                  else focusMainSearch();
+                }}>{activeView === "watchlist" ? "Explore titles" : sourceTitles.length ? "Clear filters" : "Edit search"}</button>
               </div>
             )}
             {submittedQuery && searchMode === "screen" && nextSearchPage && activeView !== "watchlist" && <div className="searchMore"><button className="secondaryAction" type="button" disabled={moreSearchLoading} onClick={() => void loadMoreSearchResults()}>{moreSearchLoading ? "Loading more titles…" : "Load more matching titles"}</button>{moreSearchError && <p role="alert">{moreSearchError}</p>}</div>}

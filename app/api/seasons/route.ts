@@ -30,8 +30,11 @@ type SeasonAccumulator = {
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const id = Number(requestUrl.searchParams.get("id"));
+  const tmdbId = Number(requestUrl.searchParams.get("tmdbId"));
+  const watchmodeValid = Number.isSafeInteger(id) && id > 0;
+  const tmdbValid = Number.isSafeInteger(tmdbId) && tmdbId > 0;
   const region = normalizeRegion(requestUrl.searchParams.get("region"));
-  if (!Number.isSafeInteger(id) || id <= 0) {
+  if (requestUrl.searchParams.has("id") === requestUrl.searchParams.has("tmdbId") || (requestUrl.searchParams.has("id") ? !watchmodeValid : !tmdbValid)) {
     return Response.json({ error: "The selected title is invalid." }, { status: 400 });
   }
 
@@ -41,17 +44,19 @@ export async function GET(request: Request) {
   }
 
   try {
-    const url = new URL(`${WATCHMODE_API}/title/${id}/episodes/`);
-    url.searchParams.set("apiKey", apiKey);
-    const response = await fetch(url, { headers: { Accept: "application/json" } });
+    const titleId = watchmodeValid ? String(id) : `tv-${tmdbId}`;
+    const url = new URL(`${WATCHMODE_API}/title/${titleId}/episodes/`);
+    url.searchParams.set("regions", region);
+    const response = await fetch(url, { headers: { Accept: "application/json", "X-API-Key": apiKey }, signal: AbortSignal.timeout(10000) });
     if (!response.ok) {
       return Response.json(
-        { error: response.status === 429 ? "Season availability is busy. Try again shortly." : "Season availability is temporarily unavailable." },
-        { status: response.status === 429 ? 429 : 502 },
+        { error: response.status === 429 ? "Season availability is busy. Try again shortly." : response.status === 404 ? "Season availability is not listed for this series yet." : "Season availability is temporarily unavailable." },
+        { status: response.status === 429 ? 429 : response.status === 404 ? 404 : 502 },
       );
     }
 
     const episodes = await response.json() as WatchmodeEpisode[];
+    if (!Array.isArray(episodes)) throw new Error("Invalid episode response");
     const seasons = new Map<number, SeasonAccumulator>();
 
     for (const episode of episodes) {
