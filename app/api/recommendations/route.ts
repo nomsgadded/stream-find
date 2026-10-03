@@ -1,3 +1,6 @@
+import { getRegionConfig } from "@/lib/regions";
+import { normalizedService } from "@/lib/offer-priority";
+
 const TMDB_API = "https://api.themoviedb.org/3";
 const IMAGE_BASE = "https://image.tmdb.org/t/p";
 
@@ -27,6 +30,8 @@ type TmdbTitle = {
   adult?: boolean;
 };
 type TmdbResponse = { results?: TmdbTitle[] };
+type RankedTitle = { title: TmdbTitle; mediaType: "movie" | "show"; rank: number; reason: string };
+type WatchProviders = { results?: Record<string, { flatrate?: Array<{ provider_name: string }> }> };
 
 const movieGenres: Record<number, string> = {
   12: "Adventure", 14: "Fantasy", 16: "Animation", 18: "Drama", 27: "Horror", 28: "Action", 35: "Comedy", 36: "History", 37: "Western", 53: "Thriller", 80: "Crime", 99: "Documentary", 878: "Science fiction", 9648: "Mystery", 10402: "Music", 10749: "Romance", 10751: "Family", 10752: "War",
@@ -39,13 +44,17 @@ export async function POST(request: Request) {
   const token = process.env.TMDB_ACCESS_TOKEN?.trim();
   if (!token) return Response.json({ error: "Personalized recommendations are not configured." }, { status: 503 });
 
-  let body: { signals?: TasteSignal[]; preferredGenres?: string[] };
+  let body: { signals?: TasteSignal[]; preferredGenres?: string[]; services?: string[]; region?: string };
   try {
-    body = await request.json() as { signals?: TasteSignal[]; preferredGenres?: string[] };
+    body = await request.json() as typeof body;
   } catch {
     return Response.json({ error: "The taste profile is invalid." }, { status: 400 });
   }
   const signals = (body.signals ?? []).filter(validSignal).slice(0, 24);
+  const services = [...new Set((Array.isArray(body.services) ? body.services : [])
+    .filter((service): service is string => typeof service === "string" && service.length <= 80)
+    .map((service) => service.trim()).filter(Boolean))].slice(0, 20);
+  const region = getRegionConfig(body.region).code;
   const knownGenres = new Map([...Object.values(movieGenres), ...Object.values(tvGenres)].map((genre) => [genre.toLowerCase(), genre]));
   const preferredGenres = [...new Set((body.preferredGenres ?? [])
     .filter((genre): genre is string => typeof genre === "string")
@@ -64,14 +73,15 @@ export async function POST(request: Request) {
         fetchTmdb("/discover/tv", token, { sort_by: "popularity.desc", include_adult: "false", ...(tvIds ? { with_genres: tvIds } : {}) }),
       ]);
       const reason = `Because you like ${preferredGenres.slice(0, 2).join(" and ")}`;
-      const titles = [
+      const candidates = [
         ...(movies.results ?? []).map((title) => ({ title, mediaType: "movie" as const })),
         ...(shows.results ?? []).map((title) => ({ title, mediaType: "show" as const })),
       ]
         .filter(({ title }) => title.id && title.poster_path && !title.adult)
-        .sort((a, b) => (b.title.vote_average ?? 0) + Math.log10((b.title.vote_count ?? 0) + 1) - ((a.title.vote_average ?? 0) + Math.log10((a.title.vote_count ?? 0) + 1)))
-        .slice(0, 12)
-        .map(({ title, mediaType }) => normalizeTitle(title, mediaType, reason));
+        .map(({ title, mediaType }) => ({ title, mediaType, reason,
+          rank: (title.vote_average ?? 0) + Math.log10((title.vote_count ?? 0) + 1) }))
+        .sort((a, b) => b.rank - a.rank);
+      const titles = await rankWithAccess(candidates, services, region, token);
       return Response.json({ section: titles.length ? { id: "personalized", kicker: "Shaped by your taste", title: "Picked for you", titles } : null }, { headers: { "Cache-Control": "private, max-age=300" } });
     }
 
@@ -104,7 +114,7 @@ export async function POST(request: Request) {
       }
     }
 
-    const titles = [...candidates.values()].sort((a, b) => b.rank - a.rank).slice(0, 12).map(({ title, mediaType, reason }) => normalizeTitle(title, mediaType, reason));
+    const titles = await rankWithAccess([...candidates.values()], services, region, token);
     const lead = positive.find((item) => item.signal === "loved") ?? positive[0];
     return Response.json({
       section: titles.length ? {
@@ -132,14 +142,37 @@ async function resolveId(signal: TasteSignal, token: string) {
   return response.results?.[0]?.id;
 }
 
-async function fetchTmdb(path: string, token: string, params: Record<string, string> = {}) {
+async function fetchTmdb<T = TmdbResponse>(path: string, token: string, params: Record<string, string> = {}): Promise<T> {
   const url = new URL(`${TMDB_API}${path}`);
   url.searchParams.set("language", "en-US");
   url.searchParams.set("page", "1");
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
-  const response = await fetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } });
+  const response = await fetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` }, next: { revalidate: 3600 } });
   if (!response.ok) throw new Error(`TMDB returned ${response.status}`);
-  return response.json() as Promise<TmdbResponse>;
+  return response.json() as Promise<T>;
+}
+
+async function rankWithAccess(candidates: RankedTitle[], services: string[], region: string, token: string) {
+  const shortlisted = candidates.sort((a, b) => b.rank - a.rank).slice(0, services.length ? 20 : 12);
+  if (!services.length) return shortlisted.map(({ title, mediaType, reason }) => normalizeTitle(title, mediaType, reason));
+
+  const checked = await Promise.all(shortlisted.map(async (candidate) => {
+    let includedOn: string[] = [];
+    try {
+      const endpoint = candidate.mediaType === "show" ? "tv" : "movie";
+      const providers = await fetchTmdb<WatchProviders>(`/${endpoint}/${candidate.title.id}/watch/providers`, token);
+      const offered = new Set((providers.results?.[region]?.flatrate ?? []).map((provider) => normalizedService(provider.provider_name)));
+      includedOn = services.filter((service) => offered.has(normalizedService(service)));
+    } catch { /* Keep taste ranking if a provider check fails. */ }
+    return { ...candidate, includedOn };
+  }));
+
+  return checked.sort((a, b) => Number(Boolean(b.includedOn.length)) - Number(Boolean(a.includedOn.length))
+    || (a.includedOn.length ? services.indexOf(a.includedOn[0]) : 99) - (b.includedOn.length ? services.indexOf(b.includedOn[0]) : 99)
+    || b.rank - a.rank)
+    .slice(0, 12)
+    .map(({ title, mediaType, reason, includedOn }) => normalizeTitle(title, mediaType,
+      includedOn.length ? `${reason} · Included on ${includedOn.slice(0, 2).join(" and ")} in ${region}` : reason));
 }
 
 function tasteWeights(signals: TasteSignal[], preferredGenres: string[] = []) {
