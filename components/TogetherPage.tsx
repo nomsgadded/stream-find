@@ -4,10 +4,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { collection, getDocs } from "firebase/firestore";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import TitlePreviewDialog from "@/components/TitlePreviewDialog";
 import { firebaseAuth, firestore } from "@/lib/firebase";
-import { titlePath } from "@/lib/title-routes";
-import { rememberTitleNavigation } from "@/lib/title-navigation";
 
 type Friend = { uid: string; displayName: string; photoURL?: string };
 type Candidate = { key: string; tmdbId: number; mediaType: "movie" | "show"; title: string; year?: number; posterUrl: string; availableOn: string[]; includedFor: number; savedBy: string[]; reason: string; rank: number };
@@ -30,6 +29,8 @@ export default function TogetherPage({ roomId }: { roomId?: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [preview, setPreview] = useState<Candidate | null>(null);
+  const previewOpen = useRef(false);
 
   useEffect(() => onAuthStateChanged(firebaseAuth, (account) => { setUser(account); setAuthReady(true); }), []);
 
@@ -60,6 +61,7 @@ export default function TogetherPage({ roomId }: { roomId?: string }) {
     if (!roomId || !user) return;
     try {
       const data = await request(`/api/together/${roomId}`);
+      if (previewOpen.current) return;
       setRoom(data.room);
       setError("");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "This movie night could not load."); }
@@ -69,7 +71,7 @@ export default function TogetherPage({ roomId }: { roomId?: string }) {
   useEffect(() => {
     if (!roomId || !user) return;
     const frame = window.requestAnimationFrame(() => { void refresh(); });
-    const interval = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 6000);
+    const interval = window.setInterval(() => { if (document.visibilityState === "visible" && !previewOpen.current) void refresh(); }, 6000);
     return () => { window.cancelAnimationFrame(frame); window.clearInterval(interval); };
   }, [roomId, user, refresh]);
 
@@ -125,15 +127,15 @@ export default function TogetherPage({ roomId }: { roomId?: string }) {
         {room.status === "open" && <p className="togetherVotingHelp">Vote for your favorite. You can change your vote.{room.hostUid === user.uid ? " As host, finalize a pick when you’re ready to close voting." : " The host will finalize the group’s pick."}</p>}
         <div className="togetherCandidates">{(winner ? [winner, ...candidates.filter((candidate) => candidate.key !== winner.key)] : candidates).map((candidate) => {
           const votes = Object.entries(room.votes).filter(([, key]) => key === candidate.key).map(([uid]) => room.people.find((person) => person.uid === uid)?.name || "Friend");
-          const href = titlePath({ title: candidate.title, mediaType: candidate.mediaType, tmdbId: candidate.tmdbId })!;
           return <article className={winner?.key === candidate.key ? "togetherCandidate winner" : "togetherCandidate"} key={candidate.key}>
-            <Link href={href} onClick={() => rememberTitleNavigation(href)} className="togetherCandidatePoster" style={{ backgroundImage: `url(${JSON.stringify(candidate.posterUrl)})` }} aria-label={`Explore ${candidate.title}`} />
-            <div className="togetherCandidateCopy">
-              <p className="togetherStep">{candidate.mediaType === "show" ? "SERIES" : "MOVIE"}{candidate.year ? ` · ${candidate.year}` : ""}{winner?.key === candidate.key ? " · TONIGHT’S PICK" : ""}</p>
-              <h3>{candidate.title}</h3>
+            <button type="button" className="togetherCandidatePreview" aria-label={`Open details for ${candidate.title}`} aria-haspopup="dialog" onClick={() => { previewOpen.current = true; setPreview(candidate); }}>
+            <span className="togetherCandidatePoster" style={{ backgroundImage: `url(${JSON.stringify(candidate.posterUrl)})` }} aria-hidden="true" />
+            <span className="togetherCandidateCopy">
+              <span className="togetherStep">{candidate.mediaType === "show" ? "SERIES" : "MOVIE"}{candidate.year ? ` · ${candidate.year}` : ""}{winner?.key === candidate.key ? " · TONIGHT’S PICK" : ""}</span>
+              <span className="togetherCandidateTitle" role="heading" aria-level={3}>{candidate.title}</span>
               <small>{room.availabilityMode === "shared" ? "Included for everyone · " : "Included · "}{candidate.availableOn.slice(0, 3).join(", ")}{candidate.availableOn.length > 3 ? ` +${candidate.availableOn.length - 3} more` : ""}{room.availabilityMode === "shared" ? "" : ` · ${room.region}`}</small>
-              <Link className="togetherDetailsLink" href={href} onClick={() => rememberTitleNavigation(href)}>View details →</Link>
-            </div>
+            </span><span className="togetherCandidateChevron" aria-hidden="true">›</span>
+            </button>
             <footer className="togetherCandidateFooter">
               <div className="togetherVotes" title={votes.length ? votes.join(", ") : undefined}>{votes.length} {votes.length === 1 ? "vote" : "votes"}</div>
               <div className="togetherCandidateActions">
@@ -146,5 +148,6 @@ export default function TogetherPage({ roomId }: { roomId?: string }) {
         <p className="togetherFootnote">{room.availabilityMode === "shared" ? "Picks are included on a shared service in each member’s country, then ranked by saved titles, taste and TMDB popularity." : "This room was made before shared-service filtering. Its availability was checked for the host’s country."} Open a title for current watch links. People’s private taste signals are never shown to the group.</p>
       </>}
     </div>
+    {preview && room && <TitlePreviewDialog key={preview.key} candidate={preview} region={room.region} onClose={() => { previewOpen.current = false; setPreview(null); }} />}
   </main>;
 }

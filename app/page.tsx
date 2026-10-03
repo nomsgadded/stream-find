@@ -1,6 +1,7 @@
 "use client";
 
 import ModalDialog from "@/components/ModalDialog";
+import WatchlistButton, { BookmarkIcon } from "@/components/WatchlistButton";
 import RecentSearches from "@/components/RecentSearches";
 import { rememberSearch } from "@/lib/recent-searches";
 
@@ -244,12 +245,6 @@ const DiscoverIcon = () => (
   <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
     <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.6" />
     <path d="m14.8 9.2-1.7 3.9-3.9 1.7 1.7-3.9 3.9-1.7Z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-  </svg>
-);
-
-const BookmarkIcon = ({ filled = false }: { filled?: boolean }) => (
-  <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-    <path d="M7 4.75A1.75 1.75 0 0 1 8.75 3h6.5A1.75 1.75 0 0 1 17 4.75V21l-5-3.2L7 21V4.75Z" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
   </svg>
 );
 
@@ -588,6 +583,7 @@ export default function Home() {
   const [socialOpen, setSocialOpen] = useState(false);
   const [socialEntryPoint, setSocialEntryPoint] = useState<"account" | "friends">("account");
   const [accountUser, setAccountUser] = useState<User | null>(null);
+  const [accountAuthReady, setAccountAuthReady] = useState(false);
   const [selectedTitle, setSelectedTitle] = useState<Title | null>(null);
   const [toast, setToast] = useState("");
   const [hydrated, setHydrated] = useState(false);
@@ -643,7 +639,10 @@ export default function Home() {
   const similarCache = useRef(new Map<number, SimilarTitle[]>());
   const seasonsCache = useRef(new Map<string, SeasonAvailability[]>());
 
-  useEffect(() => onAuthStateChanged(firebaseAuth, setAccountUser), []);
+  useEffect(() => onAuthStateChanged(firebaseAuth, (user) => {
+    setAccountUser(user);
+    setAccountAuthReady(true);
+  }), []);
 
   useEffect(() => {
     if (!accountUser) return;
@@ -2151,7 +2150,7 @@ export default function Home() {
                     <article className="titleCard" key={item.id}>
                       <div className={`poster ${item.art} ${item.backdropUrl || item.posterUrl ? "liveArtwork" : ""}`} style={artworkStyle(item)}>
                         <span className="score">{item.live ? (item.score ? `${item.score}% score` : "New") : `${item.score}% demo score`}</span>
-                        <button className={`saveButton ${saved ? "saved" : ""}`} data-testid={`save-${item.id}`} type="button" aria-pressed={saved} aria-label={`${saved ? "Remove" : "Save"} ${item.title} ${saved ? "from" : "to"} watchlist`} onClick={() => toggleWatchlist(item)}><BookmarkIcon filled={saved} /></button>
+                        <WatchlistButton className="saveButton" data-testid={`save-${item.id}`} saved={saved} titleName={item.title} onClick={() => toggleWatchlist(item)} />
                         <button className="posterButton" type="button" onClick={() => openTitle(item)} aria-label={`See all watch options for ${item.title}`} />
                         <div className="posterShade" aria-hidden="true" />
                         <div className="posterCopy"><p>{item.year || "Year unknown"} · {item.mediaType === "movie" ? "Film" : "Series"} · {item.runtime}</p><h3>{item.title}</h3></div>
@@ -2219,11 +2218,12 @@ export default function Home() {
       </nav>
 
       <SocialHub
-        key={`${socialEntryPoint}-${socialOpen}`}
+        key={`${socialEntryPoint}-${accountUser?.uid ?? "guest"}`}
         open={socialOpen}
         entryPoint={socialEntryPoint}
         onClose={() => setSocialOpen(false)}
         user={accountUser}
+        authReady={accountAuthReady}
         watchlistIds={watchlist}
         onOpenTitle={(title) => openTitle(title as Title)}
         onSaveTitle={(title) => toggleWatchlist(title as Title)}
@@ -2616,7 +2616,7 @@ export default function Home() {
                     </div>
                   </div>
                 )}
-                <button className={`detailSave ${saved ? "saved" : ""}`} type="button" aria-pressed={saved} onClick={() => toggleWatchlist(selectedTitle)}><BookmarkIcon filled={saved} /> {saved ? "Saved to watchlist" : "Save to watchlist"}</button>
+                <WatchlistButton className="detailSave" saved={saved} titleName={selectedTitle.title} onClick={() => toggleWatchlist(selectedTitle)} />
               </div>
             </ModalDialog>
           </div>

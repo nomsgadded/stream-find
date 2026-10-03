@@ -1,6 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import WatchlistButton from "@/components/WatchlistButton";
+import EpisodeGuide from "@/components/EpisodeGuide";
+import { readEpisodeTarget } from "@/lib/episode-links";
 import Image from "next/image";
 import ProviderLogo, { providerBrand, providerHost } from "@/components/ProviderLogo";
 import { useRouter } from "next/navigation";
@@ -227,7 +230,7 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
         setCredits(data.credits ?? []);
         setSeasons(data.seasons ?? []);
         setSimilar([]);
-        setSelectedSeason(data.seasons?.[0]?.seasonNumber ?? null);
+        setSelectedSeason(readEpisodeTarget(window.location.search)?.seasonNumber ?? data.seasons?.[0]?.seasonNumber ?? null);
         setStatus("ready");
         void fetch(`/api/title-details?id=${route.sourceId}&type=${route.mediaType}&section=similar`, { signal: controller.signal })
           .then((result) => result.ok ? result.json() as Promise<{ similar?: SimilarTitle[] }> : { similar: [] })
@@ -520,7 +523,7 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
         <button type="button" onClick={goBack} aria-label="Return to the previous page or Discover">← Back</button>
         <strong><span>{title.title}</span><small>{title.mediaType === "movie" ? "Movie" : "Series"} · {title.year}</small></strong>
         <div className="titleBarActions">
-          <button className={saved ? "saved" : ""} type="button" aria-pressed={saved} onClick={() => void toggleWatchlist()}>{saved ? "✓ Saved" : "+ Watchlist"}</button>
+          <WatchlistButton saved={saved} titleName={title.title} onClick={() => void toggleWatchlist()} />
         </div>
       </div>
       <button className="titleSectionDock titleSectionTrigger" ref={sectionsRef} type="button" aria-label={`Current section: ${activeSection}. Open section navigation`} aria-haspopup="dialog" aria-expanded={sectionSheetOpen} aria-controls="title-section-sheet" onClick={() => { setNavHidden(false); sectionSheetRef.current?.showModal(); setSectionSheetOpen(true); }}>
@@ -631,6 +634,7 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
             {seasonStatus === "error" && <button className="titleCreditsExpand" type="button" onClick={() => setSeasonRetry((current) => current + 1)}>Retry availability</button>}
             <div className="titleSeasonTabs" role="group" aria-label="Select a season">{seasons.map((season) => <button type="button" aria-pressed={activeSeason?.seasonNumber === season.seasonNumber} className={activeSeason?.seasonNumber === season.seasonNumber ? "active" : ""} onClick={() => setSelectedSeason(season.seasonNumber)} key={season.seasonNumber}>Season {season.seasonNumber}</button>)}</div>
             {activeSeason && <div className="titleSeasonPanel"><div>{activeSeason.posterUrl && <Image src={activeSeason.posterUrl} alt="" width={64} height={96} unoptimized loading="lazy" />}<div><strong>{activeSeason.name || `Season ${activeSeason.seasonNumber}`}</strong><p>{activeSeason.episodeCount} episodes{activeSeason.airDate ? ` · ${formatDate(activeSeason.airDate)}` : ""}</p></div></div>{seasonStatus === "ready" && (activeSeason.providers?.length ? <div className="titleSeasonProviders">{activeSeason.providers.map((provider) => <span key={`${provider.provider}-${provider.type}`}><strong>{provider.provider}</strong><small>{provider.episodeCount} of {activeSeason.episodeCount} episodes listed · {accessLabel(provider)}</small></span>)}</div> : <p>No episode-level provider listings for this season in {region}. This does not confirm the season is unavailable.</p>)}</div>}
+            {title.tmdbId && <EpisodeGuide key={title.tmdbId} tmdbId={title.tmdbId} showTitle={title.title} posterUrl={title.posterUrl} year={title.year} seasonNumber={selectedSeason} onSeasonChange={setSelectedSeason} />}
           </section>
         )}
 

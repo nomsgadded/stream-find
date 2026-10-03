@@ -1,5 +1,8 @@
 "use client";
 
+import FavoriteEpisodes from "@/components/FavoriteEpisodes";
+import { episodePath, type FavoriteEpisode } from "@/lib/episode-links";
+import { useRouter } from "next/navigation";
 import TitleArtwork from "@/components/TitleArtwork";
 import ModalDialog from "@/components/ModalDialog";
 
@@ -62,6 +65,7 @@ type Friend = Profile & { addedAt?: unknown };
 type FriendRequest = { id: string; fromUid: string; toUid: string; status: string };
 type Recommendation = { title: SocialTitle; friends: Profile[] };
 type DirectRecommendation = {
+  episode?: FavoriteEpisode;
   id: string;
   fromUid: string;
   toUid: string;
@@ -78,6 +82,7 @@ type SocialHubProps = {
   entryPoint: "account" | "friends";
   onClose: () => void;
   user: User | null;
+  authReady: boolean;
   watchlistIds: number[];
   onOpenTitle: (title: SocialTitle) => void;
   onSaveTitle: (title: SocialTitle) => void;
@@ -122,13 +127,17 @@ function authMessage(error: unknown) {
   return "Something went wrong. Please try again.";
 }
 
-export default function SocialHub({ open, entryPoint, onClose, user, watchlistIds, onOpenTitle, onSaveTitle }: SocialHubProps) {
+export default function SocialHub({ open, entryPoint, onClose, user, authReady, watchlistIds, onOpenTitle, onSaveTitle }: SocialHubProps) {
+  const router = useRouter();
   const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [username, setUsername] = useState("");
-  const [profile, setProfile] = useState<Profile | null>(null);
+  // Undefined means not checked; null means the account needs profile setup.
+  const [profile, setProfile] = useState<Profile | null | undefined>(undefined);
+  const [profileError, setProfileError] = useState(false);
+  const [profileRetry, setProfileRetry] = useState(0);
   const [activeTab, setActiveTab] = useState<"friends" | "requests" | "inbox" | "recommendations">("friends");
   const [friends, setFriends] = useState<Friend[]>([]);
   const [requests, setRequests] = useState<Array<FriendRequest & { sender: Profile }>>([]);
@@ -141,8 +150,9 @@ export default function SocialHub({ open, entryPoint, onClose, user, watchlistId
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const loadSocialData = useCallback(async (currentUser: User, currentProfile: Profile) => {
+  const loadSocialData = useCallback(async (currentUser: User, currentProfile: Profile, isCurrent: () => boolean = () => true) => {
     const friendSnapshot = await getDocs(collection(firestore, "users", currentUser.uid, "friends"));
+    if (!isCurrent()) return;
     const loadedFriends = friendSnapshot.docs.map((entry) => profileFromDoc(entry.data()));
     setFriends(loadedFriends);
 
@@ -156,6 +166,7 @@ export default function SocialHub({ open, entryPoint, onClose, user, watchlistId
       const senderSnapshot = await getDoc(doc(firestore, "users", request.fromUid));
       return senderSnapshot.exists() ? { ...request, sender: profileFromDoc(senderSnapshot.data()) } : null;
     }));
+    if (!isCurrent()) return;
     setRequests(loadedRequests.filter((item): item is FriendRequest & { sender: Profile } => Boolean(item)));
 
     const inboxSnapshot = await getDocs(query(
@@ -166,6 +177,7 @@ export default function SocialHub({ open, entryPoint, onClose, user, watchlistId
       .map((entry) => ({ id: entry.id, ...entry.data() } as DirectRecommendation))
       .filter((item) => item.status !== "dismissed")
       .sort((a, b) => (b.sentAt?.toMillis?.() ?? 0) - (a.sentAt?.toMillis?.() ?? 0));
+    if (!isCurrent()) return;
     setDirectRecommendations(inbox);
 
     const friendWatchlists = await Promise.all(loadedFriends.slice(0, 12).map(async (friend) => {
@@ -179,6 +191,7 @@ export default function SocialHub({ open, entryPoint, onClose, user, watchlistId
       if (existing) existing.friends.push(item.friend);
       else grouped.set(item.title.id, { title: item.title, friends: [item.friend] });
     }
+    if (!isCurrent()) return;
     setRecommendations([...grouped.values()].sort((a, b) => b.friends.length - a.friends.length || b.title.score - a.title.score));
     setProfile(currentProfile);
   }, [watchlistIds]);
@@ -191,18 +204,27 @@ export default function SocialHub({ open, entryPoint, onClose, user, watchlistId
       if (cancelled) return;
       if (!snapshot.exists()) {
         setProfile(null);
+        setProfileError(false);
+        setStatus("");
         setDisplayName(user.displayName ?? "");
         setUsername(cleanUsername(user.email?.split("@")[0] ?? ""));
         return;
       }
       const loadedProfile = profileFromDoc(snapshot.data());
+      setProfile(loadedProfile);
+      setProfileError(false);
+      setStatus("");
       if (!snapshot.data().displayNameLower) {
         await setDoc(doc(firestore, "users", user.uid), { displayNameLower: loadedProfile.displayName.trim().toLowerCase() }, { merge: true });
       }
-      await loadSocialData(user, loadedProfile);
-    })().catch(() => setStatus("Your social account could not be loaded."));
+      await loadSocialData(user, loadedProfile, () => !cancelled);
+    })().catch(() => {
+      if (cancelled) return;
+      setProfileError(true);
+      setStatus("Your account could not be loaded. Please try again.");
+    });
     return () => { cancelled = true; };
-  }, [loadSocialData, open, user]);
+  }, [loadSocialData, open, user, profileRetry]);
 
   const requestCount = requests.length;
   const recommendationCount = recommendations.length;
@@ -284,6 +306,7 @@ export default function SocialHub({ open, entryPoint, onClose, user, watchlistId
         transaction.set(doc(firestore, "users", user.uid), { ...nextProfile, displayNameLower: cleanName.toLowerCase(), createdAt: serverTimestamp() });
       });
       await updateProfile(user, { displayName: cleanName });
+      setProfile(nextProfile);
       await loadSocialData(user, nextProfile);
     } catch (error) {
       setStatus(error instanceof Error && error.message === "username-taken" ? "That username is already taken." : "Your profile could not be saved.");
@@ -403,7 +426,8 @@ export default function SocialHub({ open, entryPoint, onClose, user, watchlistId
 
   const openRecommendation = async (item: DirectRecommendation) => {
     if (item.status === "sent") await updateRecommendation(item, "opened");
-    onOpenTitle(item.title);
+    if (item.episode) router.push(episodePath(item.episode));
+    else onOpenTitle(item.title);
     onClose();
   };
 
@@ -418,12 +442,17 @@ export default function SocialHub({ open, entryPoint, onClose, user, watchlistId
         <div className="modalHeader socialHeader">
           <div>
             <p className="sectionKicker">{entryPoint === "account" ? "Your Stream Find" : "Stream Find together"}</p>
-            <h2 id="social-title">{user ? entryPoint === "account" ? "Your account" : "Your circle" : "Sign in to Stream Find"}</h2>
+            <h2 id="social-title">{!authReady || user ? entryPoint === "account" ? "Your account" : "Your circle" : "Sign in to Stream Find"}</h2>
           </div>
           <button className="closeButton" type="button" onClick={onClose} aria-label="Close account panel"><CloseIcon /></button>
         </div>
 
-        {!user ? (
+        {!authReady || (user && profile === undefined) ? (
+          <div className="socialBody" aria-busy={!profileError}>
+            <p className="formStatus" role="status">{profileError ? status : "Loading your account…"}</p>
+            {profileError && <button className="secondaryAction" type="button" onClick={() => { setProfileError(false); setProfileRetry((value) => value + 1); }}>Try again</button>}
+          </div>
+        ) : !user ? (
           <div className="authBody">
             <p className="modalIntro authIntro">Save your watchlist across devices, connect with friends, and see what your circle is watching.</p>
             <button className="googleButton" type="button" onClick={() => void signInWithGoogle()} disabled={busy}><GoogleIcon />Continue with Google</button>
@@ -456,6 +485,7 @@ export default function SocialHub({ open, entryPoint, onClose, user, watchlistId
               <div><strong>{profile.displayName}</strong><span>@{profile.username}</span></div>
               <button className="textButton signOutButton" type="button" onClick={() => void signOut(firebaseAuth)}>Sign out</button>
             </div>
+            {entryPoint === "account" && <FavoriteEpisodes />}
             {entryPoint === "account" && <div className="circleSectionHeading"><h3 id="your-circle-title">Your circle</h3><p>Friends, recommendations, and what you’re watching together.</p></div>}
             <div className="socialTabs" role="tablist" aria-labelledby={entryPoint === "account" ? "your-circle-title" : "social-title"}>
               <button type="button" className={activeTab === "friends" ? "active" : ""} onClick={() => setActiveTab("friends")}>Friends <span>{friends.length}</span></button>
@@ -487,10 +517,10 @@ export default function SocialHub({ open, entryPoint, onClose, user, watchlistId
               {directRecommendations.length ? <div className="directRecommendationList">{directRecommendations.map((item) => <article className={item.status === "sent" ? "unread" : ""} key={item.id}>
                 <button className="directRecommendationMain" type="button" onClick={() => void openRecommendation(item)}>
                   <TitleArtwork className={`recommendationArt ${item.title.art}`} title={item.title} />
-                  <span><small>{item.sender.displayName} recommends</small><strong>{item.title.title}</strong><em>{item.message || `Thought you might like this ${item.title.mediaType}.`}</em></span>
+                  <span><small>{item.sender.displayName} recommends</small><strong>{item.title.title}</strong>{item.episode && <small>S{item.episode.seasonNumber} · E{item.episode.episodeNumber} — {item.episode.episodeName}</small>}<em>{item.message || `Thought you might like this ${item.title.mediaType}.`}</em></span>
                   {item.status === "sent" && <i>New</i>}
                 </button>
-                <div><button className="secondaryAction" type="button" onClick={() => void saveRecommendation(item)}>{item.status === "saved" || watchlistIds.includes(item.title.id) ? "Saved" : "+ Watchlist"}</button><button className="textButton" type="button" onClick={() => void updateRecommendation(item, "dismissed")}>Dismiss</button></div>
+                <div><button className="secondaryAction" type="button" onClick={() => void saveRecommendation(item)}>{item.status === "saved" || watchlistIds.includes(item.title.id) ? "Saved" : item.episode ? "+ Show watchlist" : "+ Watchlist"}</button><button className="textButton" type="button" onClick={() => void updateRecommendation(item, "dismissed")}>Dismiss</button></div>
               </article>)}</div> : <EmptySocial title="No recommendations yet" copy="When a friend sends you a title, it will appear here." />}
             </div>}
 

@@ -53,7 +53,7 @@ export default function ModalDialog({ children, ...props }: HTMLAttributes<HTMLE
       activeDialogs.splice(activeDialogs.indexOf(dialog), 1);
       isolated.forEach(({ element, inert }) => { element.inert = inert; });
       document.body.style.overflow = previousOverflow;
-      if (trigger?.isConnected && !trigger.closest('[inert]')) trigger.focus();
+      if (trigger?.isConnected && !trigger.closest('[inert]')) trigger.focus({ preventScroll: true });
     };
   }, []);
   return <section {...props} ref={ref} tabIndex={-1} role="dialog" aria-modal="true">{children}</section>;

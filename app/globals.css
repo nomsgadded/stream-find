@@ -1377,7 +1377,6 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 .togetherCandidate.winner { border-color: rgba(244,184,63,.55); background: linear-gradient(130deg, rgba(244,184,63,.1), #111115 40%); }
 .togetherCandidatePoster { align-self: start; width: 100%; aspect-ratio: 2 / 3; border-radius: 8px; background: #242329 center / cover no-repeat; }
 .togetherCandidateCopy { min-width: 0; }
-.togetherDetailsLink { display: inline-block; margin-top: 12px; color: #ece8df; font-size: 11px; text-decoration: underline; text-underline-offset: 3px; }
 .togetherVotingHelp { margin: -6px 0 20px; color: #aaa69f; font-size: 12px; line-height: 1.5; }
 .togetherCandidateFooter { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.09); }
 .togetherCandidateFooter .togetherVotes, .togetherCandidateFooter .togetherCandidateActions { margin-top: 0; }
@@ -1525,3 +1524,132 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 .recentSearches button:focus-visible { outline: 2px solid var(--amber); outline-offset: -3px; }
 .recentSearches button:disabled { opacity: .5; cursor: wait; }
 .suggestionStatus { color: var(--muted); font-size: 13px; margin: 8px 0; }
+
+.togetherCandidatePreview { grid-column: 1 / -1; display: grid; grid-template-columns: 112px minmax(0, 1fr) 16px; align-items: start; gap: 18px; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit; }
+.togetherCandidatePreview:focus-visible { outline: 2px solid var(--amber); outline-offset: 6px; border-radius: 8px; }
+.togetherCandidatePreview:hover .togetherCandidateTitle { color: var(--amber-soft); }
+.togetherCandidateCopy, .togetherCandidateCopy > small, .togetherCandidateCopy > .togetherStep { display: block; }
+.togetherCandidateTitle { display: block; margin: 7px 0 16px; font-family: Georgia, serif; font-size: 25px; line-height: 1.15; }
+.togetherCandidateChevron { align-self: center; color: var(--amber-soft); font-size: 26px; }
+.togetherPreviewBackdrop { z-index: 1200; }
+.togetherPreview { width: min(860px, calc(100vw - 40px)); max-height: calc(100dvh - 48px); overflow-y: auto; overscroll-behavior: contain; border: 1px solid rgba(255,255,255,.16); border-radius: 20px; background: #111115; color: #ece8df; }
+.togetherPreviewHeader { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; padding: 12px 24px; background: #111115; border-bottom: 1px solid rgba(255,255,255,.1); }
+.togetherPreviewHeader > span { color: #aaa69f; font-size: 13px; }
+.togetherPreviewHeader button { width: 44px; height: 44px; border: 1px solid rgba(255,255,255,.2); border-radius: 50%; background: transparent; color: inherit; font-size: 28px; cursor: pointer; }
+.togetherPreviewContent { padding: 24px; }
+.togetherPreviewIntro { display: grid; grid-template-columns: 112px minmax(0,1fr); gap: 24px; align-items: center; }
+.togetherPreview h2 { margin: 10px 0; font-family: Georgia, serif; font-size: clamp(28px, 5vw, 44px); font-weight: 400; line-height: 1.1; }
+.togetherPreviewContent > section { margin-top: 28px; padding-top: 24px; border-top: 1px solid rgba(255,255,255,.1); }
+.togetherPreview h3 { margin: 0 0 16px; font-size: 18px; }
+.togetherPreview p { color: #aaa69f; font-size: 14px; line-height: 1.65; }
+.togetherPreview h3 > small { margin-left: 12px; color: #aaa69f; font-size: 12px; }
+.togetherPreviewOffers { display: grid; gap: 10px; }
+.togetherPreviewOffers > a, .togetherPreviewOffers > div { display: flex; gap: 14px; align-items: center; padding: 14px; border: 1px solid rgba(255,255,255,.12); border-radius: 10px; color: inherit; text-decoration: none; }
+.togetherPreviewOffers > a > span:last-child { margin-left: auto; }
+.togetherPreviewOffers small, .togetherPreviewCredits small { display: block; margin-top: 5px; color: #aaa69f; font-size: 12px; }
+.togetherPreview p.togetherPreviewAttribution { font-size: 11px; }
+.togetherPreviewCredits { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+.togetherPreviewCredits > div { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.togetherPreviewCredits > div > span { display: grid; place-items: center; flex: 0 0 48px; width: 48px; height: 48px; border-radius: 50%; overflow: hidden; background: #242329; }
+.togetherPreviewCredits img { width: 100%; height: 100%; object-fit: cover; }
+.togetherPreviewCredits strong { font-size: 13px; }
+@media (max-width: 600px) {
+  .togetherCandidatePreview { grid-template-columns: 88px minmax(0,1fr) 12px; gap: 12px; }
+  .togetherCandidateTitle { font-size: 22px; }
+  .togetherPreviewBackdrop { padding: 0; }
+  .togetherPreview { width: 100%; height: 100dvh; max-height: 100dvh; border: 0; border-radius: 0; }
+  .togetherPreviewHeader { padding: max(12px, env(safe-area-inset-top)) 20px 12px; }
+  .togetherPreviewContent { padding: 20px 20px max(24px, env(safe-area-inset-bottom)); }
+  .togetherPreviewIntro { grid-template-columns: 88px minmax(0,1fr); gap: 18px; }
+  .togetherPreviewCredits { grid-template-columns: 1fr; }
+}
+
+.watchlistIconButton, .titleActionBar .titleBarActions button.watchlistIconButton {
+  width: 44px; height: 44px; min-width: 44px; min-height: 44px; padding: 0;
+  display: inline-grid; place-items: center; flex: 0 0 44px;
+  border: 1px solid rgba(255,255,255,.22); border-radius: 50%;
+  background: rgba(8,8,10,.65); color: #ece8df; cursor: pointer;
+}
+.watchlistIconButton .icon { width: 20px; height: 20px; }
+.watchlistIconButton.saved, .titleActionBar .titleBarActions button.watchlistIconButton.saved {
+  color: var(--amber); border-color: rgba(244,184,63,.55); background: rgba(20,17,10,.88);
+}
+.watchlistIconButton:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+.watchlistIconButton:hover { border-color: var(--amber); }
+
+.episodeGuide { margin-top: 32px; padding-top: 24px; border-top: 1px solid rgba(255,255,255,.1); }
+.episodeGuide .titleSectionHeading h2 { font-size: 26px; }
+.episodeSource { color: #96928b; font-size: 12px; line-height: 1.6; }
+.episodeSeasonSelect { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 20px 0; color: #bbb7af; font-size: 13px; }
+.episodeSeasonSelect select { max-width: 100%; min-height: 44px; padding: 0 36px 0 12px; border: 1px solid rgba(255,255,255,.2); border-radius: 8px; background: #17171b; color: #ece8df; font: inherit; }
+.episodeRatingGrid { display: grid; grid-template-columns: repeat(auto-fill,minmax(64px,1fr)); gap: 8px; }
+.episodeRatingGrid a { min-height: 68px; padding: 10px 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; border: 1px solid rgba(255,255,255,.18); border-radius: 8px; color: #ece8df; background: #1b1b20; text-decoration: none; }
+.episodeRatingGrid a.highRating { background: rgba(91,198,188,.13); border-color: rgba(91,198,188,.4); color: #91e0d7; }
+.episodeRatingGrid a.fewVotes { border-style: dashed; }
+.episodeRatingGrid a.unrated { color: #9a968e; background: transparent; }
+.episodeRatingGrid small { font-size: 10px; }
+.episodeRatingGrid strong { font-size: 18px; }
+.episodeRatingGrid a:focus-visible, .episodeSeasonSelect select:focus-visible, .episodeList summary:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+.episodeList { display: grid; gap: 12px; margin-top: 20px; }
+.episodeList article { padding: 18px; border: 1px solid rgba(255,255,255,.12); border-radius: 12px; background: #111115; scroll-margin-top: 210px; }
+.episodeHeading { display: flex; justify-content: space-between; align-items: start; gap: 16px; }
+.episodeHeading > div:first-child { min-width: 0; }
+.episodeHeading h3 { margin: 7px 0; font-size: 17px; line-height: 1.35; }
+.episodeHeading small { color: #aaa69f; font-size: 11px; }
+.episodeHeading p { margin: 8px 0; color: #aaa69f; font-size: 12px; }
+.episodeScore { flex-shrink: 0; text-align: right; }
+.episodeScore strong { color: var(--amber-soft); font-size: 14px; }
+.episodeScore small { display: block; margin-top: 6px; max-width: 120px; }
+.episodeList details { margin-top: 12px; }
+.episodeList summary { min-height: 44px; padding: 12px 0; cursor: pointer; color: #d7d3cb; font-size: 12px; }
+.episodeList summary span { margin-left: 8px; color: #96928b; font-size: 10px; }
+.episodeList details img { display: block; width: min(100%,500px); height: auto; border-radius: 8px; margin-top: 12px; }
+.episodeList details p { color: #aaa69f; font-size: 13px; line-height: 1.65; }
+.togetherPreview .episodeList article { scroll-margin-top: 90px; }
+@media (max-width: 600px) {
+  .episodeList article { padding: 14px; }
+  .episodeHeading { gap: 10px; }
+  .episodeScore { max-width: 96px; }
+  .episodeList summary span { display: block; margin: 6px 0 0 15px; }
+}
+
+.episodeActions { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.episodeActions button, .episodeShareDialog button, .favoriteEpisodes button { min-height: 44px; padding: 0 14px; border: 1px solid rgba(255,255,255,.2); border-radius: 999px; background: transparent; color: #ddd9d1; cursor: pointer; }
+.episodeActions button.favoriteEpisode { display: grid; place-items: center; width: 44px; padding: 0; }
+.favoriteEpisode svg { width: 20px; height: 20px; }
+.episodeActions button.saved { color: var(--amber); border-color: var(--amber); }
+.episodeActions button:disabled, .episodeShareDialog button:disabled { opacity: .5; cursor: default; }
+.episodeShareBackdrop { z-index: 1300; }
+.episodeShareDialog { width: min(520px,calc(100vw - 32px)); padding: 24px; }
+.episodeShareDialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.episodeShareDialog header button { width: 44px; padding: 0; font-size: 24px; }
+.episodeShareDialog h2 { font-size: 24px; }
+.episodeShareDialog label { display: grid; gap: 8px; margin: 18px 0; font-size: 13px; }
+.episodeShareDialog input, .episodeShareDialog textarea, .episodeShareDialog select { width: 100%; min-height: 44px; padding: 10px; border: 1px solid rgba(255,255,255,.2); border-radius: 8px; background: #17171b; color: #ece8df; font: inherit; }
+.episodeShareDialog p { color: #aaa69f; line-height: 1.6; font-size: 13px; }
+.episodeShareButtons { display: flex; gap: 10px; margin: 18px 0; }
+.episodeSharePoster { width: 72px; height: 108px; object-fit: cover; border-radius: 8px; margin-top: 16px; }
+.favoriteEpisodes { padding: 20px 0; margin: 16px 0; border-top: 1px solid rgba(255,255,255,.1); border-bottom: 1px solid rgba(255,255,255,.1); }
+.favoriteEpisodes h3 { font-size: 18px; }
+.favoriteEpisodes p { color: #aaa69f; font-size: 12px; line-height: 1.6; }
+.favoriteEpisodes article { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
+.favoriteEpisodes article a { display: flex; align-items: center; gap: 12px; color: #ece8df; text-decoration: none; min-width: 0; }
+.favoriteEpisodes article img { flex-shrink: 0; border-radius: 6px; }
+.favoriteEpisodes small { display: block; margin-top: 6px; color: #aaa69f; font-size: 11px; }
+.favoriteEpisodes strong { font-size: 13px; }
+
+.episodeActions { flex-wrap: wrap; }
+.episodeActions .episodeWatched.active { border-color: rgba(91,198,188,.5); color: #91e0d7; background: rgba(91,198,188,.1); }
+.episodeThumbnail { flex: 0 0 96px; width: 96px; height: 60px; display: grid; place-items: center; overflow: hidden; border-radius: 8px; background: #242329; color: #aaa69f; }
+.episodeThumbnail img { width: 100%; height: 100%; object-fit: cover; }
+.episodeHeading > div:not(.episodeScore) { flex: 1; min-width: 0; }
+.episodeProgressSummary { margin: 18px 0; padding: 14px 16px; border: 1px solid rgba(91,198,188,.2); background: rgba(91,198,188,.05); border-radius: 10px; }
+.episodeProgressSummary p { margin: 0 0 10px; color: #bbb7af; font-size: 12px; line-height: 1.6; }
+.episodeProgressSummary button, .episodeImageToggle { min-height: 44px; padding: 0 14px; color: #ece8df; border: 1px solid rgba(255,255,255,.2); border-radius: 999px; background: transparent; font-size: 12px; cursor: pointer; }
+.episodeImageToggle { margin-top: 12px; }
+@media (max-width: 600px) {
+  .episodeThumbnail { flex-basis: 72px; width: 72px; height: 48px; }
+  .episodeHeading { flex-wrap: wrap; }
+  .episodeScore { width: 100%; max-width: none; text-align: left; margin-left: 82px; }
+  .episodeScore small { display: inline; margin-left: 8px; max-width: none; }
+}
