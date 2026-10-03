@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import ReviewMode from "@/components/ReviewMode";
+import ScrollMotion from "@/components/ScrollMotion";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -24,7 +25,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}<ReviewMode /></body>
+      <body>{children}<ScrollMotion /><ReviewMode /></body>
     </html>
   );
 }

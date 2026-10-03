@@ -1,12 +1,19 @@
 import { getRegionConfig } from "@/lib/regions";
+import { groupTitleRecords, mergeTitleRecords, sameTitle } from "@/lib/title-records";
 
 const WATCHMODE_API = "https://api.watchmode.com/v1";
-const MAX_RESULTS = 6;
+const PAGE_SIZE = 12;
 
 type OfferType = "included" | "free" | "rent" | "buy";
 
 type WatchmodeSearchResult = {
   id?: number;
+  name?: string;
+  result_type?: string;
+  year?: number;
+  type?: string;
+  tmdb_id?: number;
+  imdb_id?: string;
 };
 
 type WatchmodeSearchResponse = {
@@ -23,6 +30,8 @@ type WatchmodeSource = {
 };
 
 type WatchmodeDetails = {
+  tmdb_id?: number;
+  imdb_id?: string;
   backdrop?: string | null;
   critic_score?: number | null;
   genre_names?: string[] | null;
@@ -73,6 +82,9 @@ export async function GET(request: Request) {
   const idValue = requestUrl.searchParams.get("id");
   const requestedId = idValue ? Number(idValue) : null;
   const region = getRegionConfig(requestUrl.searchParams.get("region"));
+  const page = Number(requestUrl.searchParams.get("page") ?? "1");
+
+  if (!Number.isSafeInteger(page) || page < 1) return Response.json({ error: "Invalid results page." }, { status: 400 });
 
   if (idValue && (!Number.isSafeInteger(requestedId) || Number(requestedId) <= 0)) {
     return Response.json({ error: "The selected title is invalid." }, { status: 400 });
@@ -94,34 +106,24 @@ export async function GET(request: Request) {
   }
 
   try {
-    let titleIds: number[];
+    let nextPage: number | null = null;
+    let titles: NonNullable<Awaited<ReturnType<typeof fetchDetails>>>[];
     if (requestedId) {
-      titleIds = [requestedId];
+      const selected = await fetchDetails(requestedId, apiKey, region.code, region.currency);
+      titles = selected ? [selected] : [];
+      if (selected && (!selected.offers.length || !selected.posterUrl || selected.synopsis === "Synopsis unavailable.")) {
+        const peers = await findMatches(selected.title, apiKey).catch(() => []);
+        const peerIds = peers.filter((peer) => peer.id !== requestedId && sameTitle(peer, selected)).map((peer) => peer.id);
+        const related = await Promise.allSettled(peerIds.map((id) => fetchDetails(id, apiKey, region.code, region.currency)));
+        titles = mergeTitleRecords([...titles, ...related.flatMap((result) => result.status === "fulfilled" && result.value ? [result.value] : [])]);
+      }
     } else {
-      const searchUrl = new URL(`${WATCHMODE_API}/search/`);
-      searchUrl.searchParams.set("apiKey", apiKey);
-      searchUrl.searchParams.set("search_field", "name");
-      searchUrl.searchParams.set("search_value", query);
-
-      const searchResponse = await fetch(searchUrl, {
-        headers: { Accept: "application/json" },
-      });
-
-      if (!searchResponse.ok) return upstreamError(searchResponse.status);
-
-      const searchData = await searchResponse.json() as WatchmodeSearchResponse;
-      titleIds = (searchData.title_results ?? [])
-        .map((result) => result.id)
-        .filter((id): id is number => typeof id === "number")
-        .slice(0, MAX_RESULTS);
+      const groups = groupTitleRecords(await findMatches(query, apiKey));
+      const pageGroups = groups.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+      const details = await Promise.allSettled(pageGroups.flatMap((group) => group.map((item) => fetchDetails(item.id, apiKey, region.code, region.currency))));
+      titles = mergeTitleRecords(details.flatMap((result) => result.status === "fulfilled" && result.value ? [result.value] : []));
+      nextPage = page * PAGE_SIZE < groups.length ? page + 1 : null;
     }
-
-    const detailResults = await Promise.allSettled(
-      titleIds.map((id) => fetchDetails(id, apiKey, region.code, region.currency)),
-    );
-
-    const titles = detailResults
-      .flatMap((result) => result.status === "fulfilled" && result.value ? [result.value] : []);
 
     return Response.json(
       {
@@ -132,6 +134,7 @@ export async function GET(request: Request) {
         query,
         region: region.code,
         titles,
+        nextPage,
       },
       {
         headers: {
@@ -139,12 +142,37 @@ export async function GET(request: Request) {
         },
       },
     );
-  } catch {
-    return Response.json(
-      { error: "Live availability is temporarily unavailable." },
-      { status: 502 },
-    );
+  } catch (error) {
+    return upstreamError(error instanceof Error && /^\d{3}$/.test(error.message) ? Number(error.message) : 502);
   }
+}
+
+async function findMatches(query: string, apiKey: string) {
+  const searchUrl = new URL(`${WATCHMODE_API}/search/`);
+  searchUrl.searchParams.set("apiKey", apiKey);
+  searchUrl.searchParams.set("search_field", "name");
+  searchUrl.searchParams.set("search_value", query);
+  const partialUrl = new URL(`${WATCHMODE_API}/autocomplete-search/`);
+  partialUrl.searchParams.set("apiKey", apiKey);
+  partialUrl.searchParams.set("search_value", query);
+  partialUrl.searchParams.set("search_type", "2");
+  const responses = await Promise.allSettled([searchUrl, partialUrl].map(async (url) => {
+    const response = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(String(response.status));
+    const data = await response.json() as WatchmodeSearchResponse & { results?: WatchmodeSearchResult[] };
+    return data.title_results ?? (data.results ?? []).filter((item) => !item.result_type || item.result_type === "title");
+  }));
+  if (responses.every((result) => result.status === "rejected")) throw responses[0].reason;
+  const normalized = query.toLocaleLowerCase();
+  const matches = responses.flatMap((result) => result.status === "fulfilled" ? result.value : [])
+    .filter((item) => item.name?.toLocaleLowerCase().includes(normalized))
+    .flatMap((item) => typeof item.id === "number" && Number.isSafeInteger(item.id) && item.id > 0 ? [{
+      id: item.id, title: item.name!, year: item.year,
+      mediaType: item.type?.includes("movie") ? "movie" as const : "show" as const,
+      ...(item.tmdb_id ? { tmdbId: item.tmdb_id } : {}),
+      ...(item.imdb_id ? { imdbId: item.imdb_id } : {}),
+    }] : []);
+  return [...new Map(matches.map((item) => [item.id, item])).values()];
 }
 
 async function fetchDetails(id: number, apiKey: string, region: string, currency: string) {
@@ -164,9 +192,8 @@ async function fetchDetails(id: number, apiKey: string, region: string, currency
   if (!title) return null;
 
   const offers = normalizeOffers(details.sources ?? [], region, currency);
-  if (!offers.length) return null;
 
-  const mediaType = details.type?.includes("movie") ? "movie" : "show";
+  const mediaType: "movie" | "show" = details.type?.includes("movie") ? "movie" : "show";
   const score = normalizeScore(details.critic_score, details.user_rating);
   const parsedYear = Number(details.release_date?.slice(0, 4));
   const year = details.year
@@ -201,6 +228,8 @@ async function fetchDetails(id: number, apiKey: string, region: string, currency
     ...(trailerThumbnailUrl ? { trailerThumbnailUrl } : {}),
     ...(posterUrl ? { posterUrl } : {}),
     watchmodeId,
+    ...(details.tmdb_id ? { tmdbId: details.tmdb_id } : {}),
+    ...(details.imdb_id ? { imdbId: details.imdb_id } : {}),
     ...(details.will_you_like_this?.trim() ? { willYouLikeThis: details.will_you_like_this.trim() } : {}),
     year,
   };

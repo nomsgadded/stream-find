@@ -69,8 +69,6 @@ export function GlobalSearchOverlay({ open, onClose, onSearch }: { open: boolean
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     inputRef.current?.blur();
-    const selected = results[activeIndex];
-    if (selected) return openResult(selected);
     const trimmed = query.trim();
     if (trimmed) {
       onClose();

@@ -1,5 +1,6 @@
 "use client";
 
+import TitleArtwork from "@/components/TitleArtwork";
 import ModalDialog from "@/components/ModalDialog";
 
 import Image from "next/image";
@@ -74,6 +75,7 @@ type DirectRecommendation = {
 
 type SocialHubProps = {
   open: boolean;
+  entryPoint: "account" | "friends";
   onClose: () => void;
   user: User | null;
   watchlistIds: number[];
@@ -120,7 +122,7 @@ function authMessage(error: unknown) {
   return "Something went wrong. Please try again.";
 }
 
-export default function SocialHub({ open, onClose, user, watchlistIds, onOpenTitle, onSaveTitle }: SocialHubProps) {
+export default function SocialHub({ open, entryPoint, onClose, user, watchlistIds, onOpenTitle, onSaveTitle }: SocialHubProps) {
   const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -415,8 +417,8 @@ export default function SocialHub({ open, onClose, user, watchlistIds, onOpenTit
       <ModalDialog className="modalPanel socialPanel" role="dialog" aria-modal="true" aria-labelledby="social-title">
         <div className="modalHeader socialHeader">
           <div>
-            <p className="sectionKicker">Stream Find together</p>
-            <h2 id="social-title">{user ? "Your circle" : "Sign in to Stream Find"}</h2>
+            <p className="sectionKicker">{entryPoint === "account" ? "Your Stream Find" : "Stream Find together"}</p>
+            <h2 id="social-title">{user ? entryPoint === "account" ? "Your account" : "Your circle" : "Sign in to Stream Find"}</h2>
           </div>
           <button className="closeButton" type="button" onClick={onClose} aria-label="Close account panel"><CloseIcon /></button>
         </div>
@@ -454,7 +456,8 @@ export default function SocialHub({ open, onClose, user, watchlistIds, onOpenTit
               <div><strong>{profile.displayName}</strong><span>@{profile.username}</span></div>
               <button className="textButton signOutButton" type="button" onClick={() => void signOut(firebaseAuth)}>Sign out</button>
             </div>
-            <div className="socialTabs" role="tablist" aria-label="Social views">
+            {entryPoint === "account" && <div className="circleSectionHeading"><h3 id="your-circle-title">Your circle</h3><p>Friends, recommendations, and what you’re watching together.</p></div>}
+            <div className="socialTabs" role="tablist" aria-labelledby={entryPoint === "account" ? "your-circle-title" : "social-title"}>
               <button type="button" className={activeTab === "friends" ? "active" : ""} onClick={() => setActiveTab("friends")}>Friends <span>{friends.length}</span></button>
               <button type="button" className={activeTab === "requests" ? "active" : ""} onClick={() => setActiveTab("requests")}>Requests {requestCount > 0 && <span>{requestCount}</span>}</button>
               <button type="button" className={activeTab === "inbox" ? "active" : ""} onClick={() => setActiveTab("inbox")}>Inbox {inboxCount > 0 && <span>{inboxCount}</span>}</button>
@@ -464,7 +467,7 @@ export default function SocialHub({ open, onClose, user, watchlistIds, onOpenTit
             {activeTab === "friends" && <div className="socialPane">
               {selectedFriend ? <>
                 <div className="friendWatchlistHeader"><button className="textButton" type="button" onClick={() => setSelectedFriend(null)}>← All friends</button><div><Person profile={selectedFriend} /><span>{friendWatchlist.length} saved</span></div></div>
-                {friendWatchlist.length ? <div className="recommendationList">{friendWatchlist.map((title) => <button className="recommendationRow" type="button" key={title.id} onClick={() => { onOpenTitle(title); onClose(); }}><span className={`recommendationArt ${title.art}`} /><span><strong>{title.title}</strong><small>{title.year} · {title.genres.slice(0, 2).join(" · ")}</small><em>Saved by {selectedFriend.displayName}</em></span><b>{title.score}</b></button>)}</div> : <EmptySocial title="Nothing saved yet" copy={`${selectedFriend.displayName} has not added anything to their watchlist.`} />}
+                {friendWatchlist.length ? <div className="recommendationList">{friendWatchlist.map((title) => <button className="recommendationRow" type="button" key={title.id} onClick={() => { onOpenTitle(title); onClose(); }}><TitleArtwork className={`recommendationArt ${title.art}`} title={title} /><span><strong>{title.title}</strong><small>{title.year} · {title.genres.slice(0, 2).join(" · ")}</small><em>Saved by {selectedFriend.displayName}</em></span><b>{title.score}</b></button>)}</div> : <EmptySocial title="Nothing saved yet" copy={`${selectedFriend.displayName} has not added anything to their watchlist.`} />}
               </> : <>
                 <form className="friendSearch" onSubmit={searchFriend}><input value={friendSearch} onChange={(event) => setFriendSearch(event.target.value)} placeholder="Search people" aria-label="Search by name or username" /><button type="submit" disabled={busy} aria-label="Find people">{busy ? "…" : "Find"}</button></form>
                 {searchResults.length > 0 && <div className="friendSearchResults" aria-label="Matching members">{searchResults.map((result) => <div className="personRow highlighted" key={result.uid}><Person profile={result} /><button className="secondaryAction" type="button" onClick={() => void sendFriendRequest(result)}>Add friend</button></div>)}</div>}
@@ -483,7 +486,7 @@ export default function SocialHub({ open, onClose, user, watchlistIds, onOpenTit
               <div className="recommendationHeading"><div><h3>Recommended directly to you</h3><p>Personal picks from people in your circle.</p></div></div>
               {directRecommendations.length ? <div className="directRecommendationList">{directRecommendations.map((item) => <article className={item.status === "sent" ? "unread" : ""} key={item.id}>
                 <button className="directRecommendationMain" type="button" onClick={() => void openRecommendation(item)}>
-                  <span className={`recommendationArt ${item.title.art}`} style={socialArtwork(item.title)} />
+                  <TitleArtwork className={`recommendationArt ${item.title.art}`} title={item.title} />
                   <span><small>{item.sender.displayName} recommends</small><strong>{item.title.title}</strong><em>{item.message || `Thought you might like this ${item.title.mediaType}.`}</em></span>
                   {item.status === "sent" && <i>New</i>}
                 </button>
@@ -493,7 +496,7 @@ export default function SocialHub({ open, onClose, user, watchlistIds, onOpenTit
 
             {activeTab === "recommendations" && <div className="socialPane">
               <div className="recommendationHeading"><div><h3>From your friends’ watchlists</h3><p>Popular picks you have not saved yet.</p></div></div>
-              {recommendations.length ? <div className="recommendationList">{recommendations.slice(0, 8).map((recommendation) => <button className="recommendationRow" type="button" key={recommendation.title.id} onClick={() => { onOpenTitle(recommendation.title); onClose(); }}><span className={`recommendationArt ${recommendation.title.art}`} style={socialArtwork(recommendation.title)} /><span><strong>{recommendation.title.title}</strong><small>{recommendation.title.year} · {recommendation.title.genres.slice(0, 2).join(" · ")}</small><em>{recommendation.friends.length === 1 ? `${recommendation.friends[0].displayName} saved this` : `${recommendation.friends.length} friends saved this`}</em></span><b>{recommendation.title.score}</b></button>)}</div> : <EmptySocial title="Recommendations are warming up" copy="Add friends to see titles from their watchlists here." />}
+              {recommendations.length ? <div className="recommendationList">{recommendations.slice(0, 8).map((recommendation) => <button className="recommendationRow" type="button" key={recommendation.title.id} onClick={() => { onOpenTitle(recommendation.title); onClose(); }}><TitleArtwork className={`recommendationArt ${recommendation.title.art}`} title={recommendation.title} /><span><strong>{recommendation.title.title}</strong><small>{recommendation.title.year} · {recommendation.title.genres.slice(0, 2).join(" · ")}</small><em>{recommendation.friends.length === 1 ? `${recommendation.friends[0].displayName} saved this` : `${recommendation.friends.length} friends saved this`}</em></span><b>{recommendation.title.score}</b></button>)}</div> : <EmptySocial title="Recommendations are warming up" copy="Add friends to see titles from their watchlists here." />}
             </div>}
           </div>
         )}
@@ -509,9 +512,4 @@ function Person({ profile }: { profile: Profile }) {
 
 function EmptySocial({ title, copy }: { title: string; copy: string }) {
   return <div className="socialEmpty"><span aria-hidden="true">◎</span><strong>{title}</strong><p>{copy}</p></div>;
-}
-
-function socialArtwork(title: SocialTitle) {
-  const image = title.posterUrl || title.backdropUrl;
-  return image ? { backgroundImage: `url(${JSON.stringify(image)})` } : undefined;
 }

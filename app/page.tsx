@@ -6,7 +6,7 @@ import ProviderLogo, { providerBrand, providerHost } from "@/components/Provider
 import { useRouter } from "next/navigation";
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, serverTimestamp, setDoc, writeBatch } from "firebase/firestore";
+import { collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, serverTimestamp, setDoc, updateDoc, writeBatch } from "firebase/firestore";
 import NotificationBell from "@/components/NotificationBell";
 import SocialHub from "@/components/SocialHub";
 import MemberHome from "@/components/MemberHome";
@@ -18,6 +18,7 @@ import { bestOffer, compareOffers, offerPriority } from "@/lib/offer-priority";
 import { regions } from "@/lib/regions";
 import { titlePath } from "@/lib/title-routes";
 import { rememberTitleNavigation } from "@/lib/title-navigation";
+import { resolveTitleArtwork } from "@/lib/title-artwork";
 
 type OfferType = "included" | "free" | "rent" | "buy";
 type MediaType = "movie" | "show";
@@ -63,6 +64,7 @@ type Title = {
 type LiveSearchResponse = {
   error?: string;
   titles?: Title[];
+  nextPage?: number | null;
 };
 
 type AutocompleteResult = {
@@ -167,7 +169,7 @@ type DiscoveryResponse = {
 };
 
 type TasteSignal = "watched" | "loved" | "not_for_me";
-type TasteEntry = { signal: TasteSignal; id: number; title: string; year: number; mediaType: MediaType; genres: string[]; tmdbId?: number; watchmodeId?: number; updatedAt?: string };
+type TasteEntry = { signal: TasteSignal; id: number; title: string; year: number; mediaType: MediaType; genres: string[]; tmdbId?: number; watchmodeId?: number; posterUrl?: string; watched?: boolean; updatedAt?: string };
 type PersonalizedResponse = { section?: DiscoverySection | null; error?: string };
 
 type CountryOption = {
@@ -558,18 +560,24 @@ export default function Home() {
   const [mediaFilter, setMediaFilter] = useState<"all" | MediaType>("all");
   const [accessFilter, setAccessFilter] = useState<AccessFilter>("all");
   const [providerFilter, setProviderFilter] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<"discover" | "watchlist">("discover");
+  const [activeView, setActiveView] = useState<"discover" | "watchlist" | "search">("discover");
   const [savedServices, setSavedServices] = useState<string[]>(defaultServices);
   const [watchlist, setWatchlist] = useState<number[]>([]);
+  const [watchlistTab, setWatchlistTab] = useState<"active" | "watched">("active");
   const [savedLiveTitles, setSavedLiveTitles] = useState<Title[]>([]);
+  const artworkChecked = useRef(new Set<number>());
   const [liveResults, setLiveResults] = useState<Title[]>([]);
   const [liveStatus, setLiveStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [liveError, setLiveError] = useState("");
+  const [nextSearchPage, setNextSearchPage] = useState<number | null>(null);
+  const [moreSearchLoading, setMoreSearchLoading] = useState(false);
+  const [moreSearchError, setMoreSearchError] = useState("");
   const [serviceModalOpen, setServiceModalOpen] = useState(false);
   const [serviceSearch, setServiceSearch] = useState("");
   const [providerDirectory, setProviderDirectory] = useState<ProviderStyle[]>(featuredProviders);
   const [providersLoading, setProvidersLoading] = useState(true);
   const [socialOpen, setSocialOpen] = useState(false);
+  const [socialEntryPoint, setSocialEntryPoint] = useState<"account" | "friends">("account");
   const [accountUser, setAccountUser] = useState<User | null>(null);
   const [selectedTitle, setSelectedTitle] = useState<Title | null>(null);
   const [toast, setToast] = useState("");
@@ -591,6 +599,11 @@ export default function Home() {
   const [discoveryStatus, setDiscoveryStatus] = useState<"loading" | "ready" | "error">("loading");
   const [discoveryError, setDiscoveryError] = useState("");
   const [tasteSignals, setTasteSignals] = useState<Record<string, TasteEntry>>({});
+  const watchedTitles = useMemo(() => Object.values(tasteSignals)
+    .filter((entry) => entry.watched === true || entry.signal === "watched")
+    .sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? ""))), [tasteSignals]);
+  const watchedIds = useMemo(() => new Set(watchedTitles.map((entry) => entry.id)), [watchedTitles]);
+  const activeWatchlistCount = watchlist.filter((id) => !watchedIds.has(id)).length;
   const [personalizedSection, setPersonalizedSection] = useState<DiscoverySection | null>(null);
   const [personalizedLoading, setPersonalizedLoading] = useState(false);
   const [musicVideos, setMusicVideos] = useState<MusicVideo[]>([]);
@@ -599,7 +612,6 @@ export default function Home() {
   const [musicFilter, setMusicFilter] = useState<MusicVideoFilter>("all");
   const [selectedMusicVideo, setSelectedMusicVideo] = useState<MusicVideo | null>(null);
   const [releaseAlertsEnabled, setReleaseAlertsEnabled] = useState(true);
-  const [releaseAlerts, setReleaseAlerts] = useState<ReleaseAlert[]>([]);
   const [releaseAlertsStatus, setReleaseAlertsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [releaseAlertsError, setReleaseAlertsError] = useState("");
   const [pushStatus, setPushStatus] = useState<PushStatus>("checking");
@@ -675,23 +687,25 @@ export default function Home() {
     void getDocs(collection(firestore, "users", accountUser.uid, "availabilitySnapshots"))
       .then((snapshot) => {
         if (cancelled) return;
-        const checked = snapshot.docs
-          .map((entry) => entry.data().checkedAt as { toMillis?: () => number } | undefined)
-          .map((timestamp) => timestamp?.toMillis?.() ?? 0)
-          .filter(Boolean);
-        setAvailabilityTracking({ count: snapshot.size, ...(checked.length ? { lastChecked: Math.max(...checked) } : {}) });
+        const activeSnapshots = snapshot.docs.filter((entry) => watchlist.includes(Number(entry.id)) && !watchedIds.has(Number(entry.id)));
+        const activeChecked = activeSnapshots.map((entry) => (entry.data().checkedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0).filter(Boolean);
+        setAvailabilityTracking({ count: activeSnapshots.length, ...(activeChecked.length ? { lastChecked: Math.max(...activeChecked) } : {}) });
       })
       .catch(() => { if (!cancelled) setAvailabilityTracking({ count: 0 }); });
     return () => { cancelled = true; };
-  }, [accountUser, activeView, hydrated]);
+  }, [accountUser, activeView, hydrated, watchlist, watchedIds]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       const params = new URLSearchParams(window.location.search);
       if (params.get("view") === "watchlist") setActiveView("watchlist");
       if (params.get("panel") === "services") setServiceModalOpen(true);
-      if (params.get("panel") === "friends") setSocialOpen(true);
+      if (params.get("panel") === "friends") {
+        setSocialEntryPoint("friends");
+        setSocialOpen(true);
+      }
       if (params.get("search") === "1") {
+        setActiveView("search");
         window.setTimeout(() => {
           searchInputRef.current?.scrollIntoView({ behavior: "auto", block: "center" });
           searchInputRef.current?.focus();
@@ -897,9 +911,9 @@ export default function Home() {
   }, [accountUser, hydrated]);
 
   useEffect(() => {
-    if (!hydrated || activeView !== "watchlist" || !releaseAlertsEnabled || watchlist.length === 0) return;
+    if (!hydrated || activeView !== "watchlist" || watchlistTab !== "active" || !releaseAlertsEnabled || activeWatchlistCount === 0) return;
     const trackedTitles = [...new Map([...catalog, ...savedLiveTitles].map((title) => [title.id, title])).values()]
-      .filter((title) => watchlist.includes(title.id) && (title.live || title.tmdbId))
+      .filter((title) => watchlist.includes(title.id) && !watchedIds.has(title.id) && (title.live || title.tmdbId))
       .slice(0, 12);
     if (!trackedTitles.length) return;
 
@@ -924,7 +938,6 @@ export default function Home() {
       })
       .then((data) => {
         const alerts = data.alerts ?? [];
-        setReleaseAlerts(alerts);
         setReleaseAlertsStatus("ready");
         if (accountUser) void syncReleaseNotifications(accountUser.uid, alerts, trackedTitles);
       })
@@ -934,7 +947,7 @@ export default function Home() {
         setReleaseAlertsError(error instanceof Error ? error.message : "Release updates could not load.");
       });
     return () => controller.abort();
-  }, [accountUser, activeView, country, hydrated, releaseAlertsEnabled, savedLiveTitles, watchlist]);
+  }, [accountUser, activeView, country, hydrated, releaseAlertsEnabled, savedLiveTitles, watchlist, watchlistTab, watchedIds, activeWatchlistCount]);
 
   useEffect(() => {
     const modalOpen = onboardingOpen || serviceModalOpen || socialOpen || Boolean(selectedTitle) || Boolean(selectedMusicVideo);
@@ -1018,11 +1031,32 @@ export default function Home() {
     return [];
   }, [activeView, liveResults, savedLiveTitles, submittedQuery]);
 
+  useEffect(() => {
+    if (!hydrated || activeView !== "watchlist") return;
+    const missing = savedLiveTitles.filter((title) => !title.posterUrl && !artworkChecked.current.has(title.id));
+    if (!missing.length) return;
+    missing.forEach((title) => artworkChecked.current.add(title.id));
+    const uid = accountUser?.uid;
+    void (async () => {
+      for (let offset = 0; offset < missing.length; offset += 6) {
+        await Promise.all(missing.slice(offset, offset + 6).map(async (title) => {
+          const artwork = await resolveTitleArtwork(title);
+          if (!artwork.posterUrl) return;
+          setSavedLiveTitles((current) => current.map((item) => item.id === title.id && !item.posterUrl ? { ...item, ...artwork } : item));
+          if (uid) {
+            // Updating only artwork preserves saved dates, monitoring, and offers.
+            await updateDoc(doc(firestore, "users", uid, "watchlist", String(title.id)), artwork).catch(() => undefined);
+          }
+        }));
+      }
+    })();
+  }, [accountUser, activeView, hydrated, savedLiveTitles]);
+
   const filteredTitles = useMemo(() => {
     const normalized = submittedQuery.trim().toLowerCase();
     return sourceTitles
       .filter((title) => {
-        if (activeView === "watchlist" && !watchlist.includes(title.id)) return false;
+        if (activeView === "watchlist" && (!watchlist.includes(title.id) || watchedIds.has(title.id))) return false;
         if (mediaFilter !== "all" && title.mediaType !== mediaFilter) return false;
         if (accessFilter !== "all" && !title.offers.some((offer) => offer.type === accessFilter)) return false;
         if (providerFilter && !title.offers.some((offer) => offer.provider === providerFilter)) return false;
@@ -1045,7 +1079,7 @@ export default function Home() {
           - (bOffer ? offerPriority(bOffer, savedServices) : 9);
         return accessDifference || b.score - a.score || a.title.localeCompare(b.title);
       });
-  }, [accessFilter, activeView, mediaFilter, providerFilter, savedServices, sourceTitles, submittedQuery, watchlist]);
+  }, [accessFilter, activeView, mediaFilter, providerFilter, savedServices, sourceTitles, submittedQuery, watchlist, watchedIds]);
 
   const filteredMusicVideos = useMemo(() => musicVideos.filter((video) => {
     if (musicFilter === "all") return true;
@@ -1064,9 +1098,14 @@ export default function Home() {
     window.setTimeout(() => setToast(""), 2400);
   };
 
+  const openSocial = (entryPoint: "account" | "friends") => {
+    setSocialEntryPoint(entryPoint);
+    setSocialOpen(true);
+  };
+
   const toggleDeviceNotifications = async () => {
     if (!accountUser) {
-      setSocialOpen(true);
+      openSocial("account");
       showToast("Sign in to receive release notifications");
       return;
     }
@@ -1143,10 +1182,12 @@ export default function Home() {
   };
 
   const focusMainSearch = () => {
-    const input = searchInputRef.current;
-    if (!input) return;
-    input.scrollIntoView({ behavior: "auto", block: "center" });
-    input.focus();
+    setActiveView("search");
+    window.scrollTo({ top: 0, behavior: "auto" });
+    window.setTimeout(() => {
+      searchInputRef.current?.scrollIntoView({ behavior: "auto", block: "center" });
+      searchInputRef.current?.focus();
+    }, 50);
   };
 
   const closeAutocomplete = () => {
@@ -1213,9 +1254,14 @@ export default function Home() {
     closeAutocomplete();
     setQuery(trimmed);
     setSubmittedQuery(trimmed);
-    setActiveView("discover");
+    setActiveView(accountUser ? "search" : "discover");
     setProviderFilter(null);
+    setMediaFilter("all");
+    setAccessFilter("all");
     setLiveResults([]);
+    setNextSearchPage(null);
+    setMoreSearchLoading(false);
+    setMoreSearchError("");
     setLiveError("");
     scrollToResults();
 
@@ -1238,9 +1284,11 @@ export default function Home() {
       });
       const data = await response.json() as LiveSearchResponse;
       if (!response.ok) throw new Error(data.error || "Live availability is temporarily unavailable.");
+      if (controller.signal.aborted) return;
       const titles = data.titles ?? [];
       const resolvedTitles = titles.length ? titles : fallbackTitle ? [fallbackTitle] : [];
       setLiveResults(resolvedTitles);
+      setNextSearchPage(data.nextPage ?? null);
       setLiveStatus("ready");
       if (openDirectly && resolvedTitles[0]) {
         const path = titlePath(resolvedTitles[0]);
@@ -1265,7 +1313,7 @@ export default function Home() {
     closeAutocomplete();
     setQuery(trimmed);
     setSubmittedQuery(trimmed);
-    setActiveView("discover");
+    setActiveView(accountUser ? "search" : "discover");
     setMusicVideos([]);
     setMusicError("");
     setMusicFilter("all");
@@ -1294,6 +1342,31 @@ export default function Home() {
       setMusicError(error instanceof Error ? error.message : "Music video search could not finish.");
     } finally {
       if (searchController.current === controller) searchController.current = null;
+    }
+  };
+
+  const loadMoreSearchResults = async () => {
+    if (!nextSearchPage || moreSearchLoading) return;
+    const controller = new AbortController();
+    searchController.current?.abort();
+    searchController.current = controller;
+    setMoreSearchLoading(true);
+    setMoreSearchError("");
+    try {
+      const params = new URLSearchParams({ q: submittedQuery, region: country, page: String(nextSearchPage) });
+      const response = await fetch(`/api/search?${params}`, { signal: controller.signal });
+      const data = await response.json() as LiveSearchResponse;
+      if (!response.ok) throw new Error(data.error || "More results could not be loaded.");
+      if (controller.signal.aborted) return;
+      setLiveResults((current) => [...new Map([...current, ...(data.titles ?? [])].map((title) => [title.id, title])).values()]);
+      setNextSearchPage(data.nextPage ?? null);
+    } catch (error) {
+      if (!controller.signal.aborted) setMoreSearchError(error instanceof Error ? error.message : "More results could not be loaded.");
+    } finally {
+      if (searchController.current === controller) {
+        searchController.current = null;
+        setMoreSearchLoading(false);
+      }
     }
   };
 
@@ -1328,11 +1401,6 @@ export default function Home() {
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       setAutocompleteIndex((current) => current <= 0 ? autocompleteResults.length - 1 : current - 1);
-    } else if (event.key === "Enter" && autocompleteIndex >= 0) {
-      event.preventDefault();
-      event.currentTarget.blur();
-      const selection = autocompleteResults[autocompleteIndex];
-      chooseSuggestion(selection.title, selection.id);
     }
   };
 
@@ -1445,7 +1513,7 @@ export default function Home() {
     setMediaFilter("all");
     setAccessFilter("all");
     setProviderFilter(null);
-    setActiveView("discover");
+    setActiveView((current) => current === "watchlist" ? "watchlist" : accountUser ? "search" : "discover");
     setMusicVideos([]);
     setMusicStatus("idle");
     setMusicError("");
@@ -1469,7 +1537,7 @@ export default function Home() {
     setProviderFilter(null);
     setSelectedTitle(null);
     setSelectedMusicVideo(null);
-    setActiveView("discover");
+    setActiveView(accountUser ? "search" : "discover");
   };
 
   const changeCountry = (nextCountry: string) => {
@@ -1501,6 +1569,7 @@ export default function Home() {
     searchController.current?.abort();
     closeAutocomplete();
     setActiveView(view);
+    if (view === "watchlist") setWatchlistTab("active");
     setQuery("");
     setSubmittedQuery("");
     setLiveResults([]);
@@ -1510,7 +1579,8 @@ export default function Home() {
     setMusicVideos([]);
     setMusicStatus("idle");
     setMusicError("");
-    scrollToResults();
+    if (view === "watchlist") scrollToResults();
+    else window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const resultHeading = searchMode === "music"
@@ -1530,7 +1600,7 @@ export default function Home() {
   const resultKicker = searchMode === "music"
     ? submittedQuery ? "YouTube music results" : "Official videos, live sets, and lyrics"
     : activeView === "watchlist"
-    ? `${watchlist.length} saved`
+    ? `${activeWatchlistCount} to watch · ${watchedTitles.length} watched`
     : submittedQuery
       ? `Live ${country} availability`
       : "Curated for tonight";
@@ -1541,7 +1611,7 @@ export default function Home() {
     ?? regions[0];
 
   return (
-    <main className={accountUser ? "memberExperience" : undefined}>
+    <main className={accountUser ? `memberExperience ${activeView}View` : undefined}>
       <Suspense fallback={null}><SearchRouteSync onQuery={(value) => {
         if (value) {
           if (submittedQuery !== value || searchMode !== "screen") {
@@ -1562,29 +1632,29 @@ export default function Home() {
         </button>
         <nav className="desktopNav" aria-label="Primary navigation">
           <button className={activeView === "discover" ? "active" : ""} type="button" onClick={() => openView("discover")}>Discover</button>
-          <button className={activeView === "watchlist" ? "active" : ""} type="button" onClick={() => openView("watchlist")}>Watchlist <span className="navCount">{watchlist.length}</span></button>
+          <button className={activeView === "watchlist" ? "active" : ""} type="button" onClick={() => openView("watchlist")}>Watchlist <span className="navCount">{activeWatchlistCount}</span></button>
           <button type="button" onClick={() => setServiceModalOpen(true)}>My services</button>
-          <button type="button" onClick={() => setSocialOpen(true)}>Friends</button>
+          <button type="button" onClick={() => openSocial("friends")}>Friends</button>
         </nav>
         <div className="headerActions">
           <NotificationBell user={accountUser} />
           <HeaderSearchButton onClick={focusMainSearch} />
-          <button className="profileButton" type="button" onClick={() => setSocialOpen(true)} aria-label={accountUser ? "Open account and friends" : "Sign in to Stream Find"}>{accountUser ? (accountUser.displayName || accountUser.email || "SF").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() : "SF"}</button>
+          <button className="profileButton" type="button" onClick={() => openSocial("account")} aria-label={accountUser ? "Open your account" : "Sign in to Stream Find"}>{accountUser ? (accountUser.displayName || accountUser.email || "SF").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() : "SF"}</button>
         </div>
       </header>
 
-      <section className={`hero${accountUser ? " memberHero" : ""}${autocompleteOpen && searchMode === "screen" ? " autocompleteActive" : ""}`} id="top">
+      {(!accountUser || activeView !== "watchlist") && <section className={`hero${accountUser ? " memberHero" : ""}${autocompleteOpen && searchMode === "screen" ? " autocompleteActive" : ""}`} id="top">
         <div className="heroBackdrop" aria-hidden="true" />
         <div className="heroGlow" aria-hidden="true" />
         <div className="heroContent">
           <p className="eyebrow"><span /> {accountUser ? `Welcome back${accountUser.displayName ? `, ${accountUser.displayName.split(" ")[0]}` : ""}` : searchMode === "music" ? "One search. Every sound." : "One search. Every screen."}</p>
-          <h1>{accountUser ? (searchMode === "music" ? "What do you want to hear?" : "What do you want to watch?") : searchMode === "music" ? <>Find the song.<br /><em>Watch the moment.</em></> : <>Find the story.<br /><em>Skip the search.</em></>}</h1>
+          <h1>{accountUser ? activeView === "discover" ? "Find something worth watching." : (searchMode === "music" ? "What do you want to hear?" : "What do you want to watch?") : searchMode === "music" ? <>Find the song.<br /><em>Watch the moment.</em></> : <>Find the story.<br /><em>Skip the search.</em></>}</h1>
           <p className="heroCopy">
             {accountUser ? (searchMode === "music" ? "Search artists, songs, and performances." : `${savedServices.length ? `Prioritizing your ${savedServices.length} saved service${savedServices.length === 1 ? "" : "s"}` : "Choose your services for included picks"} · ${activeCountry.name}`) : searchMode === "music"
               ? "Find official music videos, live performances, lyric videos, and visualizers from artists around the world."
               : "See where any movie or show is streaming, what is already included, and the cheapest way to watch."}
           </p>
-          <div className="searchModeSwitch" role="tablist" aria-label="Search category">
+          {(!accountUser || activeView === "search") && <><div className="searchModeSwitch" role="tablist" aria-label="Search category">
             <button type="button" role="tab" aria-selected={searchMode === "screen"} className={searchMode === "screen" ? "active" : ""} onClick={() => changeSearchMode("screen")}>Movies &amp; TV</button>
             <button type="button" role="tab" aria-selected={searchMode === "music"} className={searchMode === "music" ? "active" : ""} onClick={() => changeSearchMode("music")}><span aria-hidden="true">▶</span> Music videos</button>
           </div>
@@ -1673,6 +1743,7 @@ export default function Home() {
               <button type="button" key={title} onClick={() => searchMode === "music" ? void runMusicSearch(title) : chooseSuggestion(title)}>{title}</button>
             ))}
           </div>
+          </>}
         </div>
         <button className="availabilityPreview" type="button" onClick={() => document.getElementById("title-search")?.focus()} aria-label={searchMode === "music" ? "Search YouTube music videos" : `Search live ${activeCountry.name} streaming availability`}>
           <span className="availabilityLabel"><span className="liveDot" /> {searchMode === "music" ? "Music discovery" : "Live availability"}</span>
@@ -1682,7 +1753,7 @@ export default function Home() {
           </span>
           <span className="includedPill livePill">{searchMode === "music" ? "Play" : "Live"}</span>
         </button>
-      </section>
+      </section>}
 
       {!accountUser && searchMode === "screen" && <section className="serviceStrip" id="services" aria-labelledby="services-title">
         <div>
@@ -1717,10 +1788,10 @@ export default function Home() {
         </div>
       </section>}
 
-      {accountUser && isDiscoveryHome && <MemberHome key={accountUser.uid} user={accountUser} watchlistIds={watchlist} watchlistTitles={[...catalog, ...savedLiveTitles]} services={savedServices} region={country} onServices={() => setServiceModalOpen(true)} onFriends={() => setSocialOpen(true)} onWatchlist={() => openView("watchlist")} />}
+      {accountUser && isDiscoveryHome && <MemberHome key={accountUser.uid} user={accountUser} watchlistIds={watchlist} services={savedServices} region={country} onServices={() => setServiceModalOpen(true)} onFriends={() => openSocial("friends")} onSearch={focusMainSearch} />}
       {!accountUser && isDiscoveryHome && searchMode === "screen" && <div className="guestPlatform"><PlatformHighlights key={savedServices.join("|")} services={savedServices} region={country} onServices={() => setServiceModalOpen(true)} /></div>}
 
-      <section className="discoverSection" id="discover" aria-labelledby="discover-title">
+      {(!accountUser || activeView !== "search" || submittedQuery || liveStatus === "error" || musicStatus === "error") && <section className="discoverSection" id="discover" aria-labelledby="discover-title">
         {isDiscoveryHome ? (
           <>
             <div className="sectionHeading discoveryIntro">
@@ -1788,8 +1859,24 @@ export default function Home() {
                 <p className={`sectionKicker ${submittedQuery ? "liveKicker" : ""}`}>{resultKicker}</p>
                 <h2 id="discover-title">{resultHeading}</h2>
               </div>
-              <button className="clearButton" type="button" onClick={clearFilters}>Clear all</button>
+              {(activeView !== "watchlist" || watchlistTab === "active") && <button className="clearButton" type="button" onClick={clearFilters}>Clear filters</button>}
             </div>
+
+            {activeView === "watchlist" && <div className="watchlistStateTabs" role="tablist" aria-label="Watchlist status">
+              <button type="button" role="tab" aria-selected={watchlistTab === "active"} className={watchlistTab === "active" ? "active" : ""} onClick={() => setWatchlistTab("active")}>To watch <span>{activeWatchlistCount}</span></button>
+              <button type="button" role="tab" aria-selected={watchlistTab === "watched"} className={watchlistTab === "watched" ? "active" : ""} onClick={() => setWatchlistTab("watched")}>Watched <span>{watchedTitles.length}</span></button>
+            </div>}
+
+            {activeView === "watchlist" && watchlistTab === "watched" ? <div className="watchedHistory">
+              <p>Titles you’ve marked Watched stay here to shape your recommendations. They won’t receive watchlist alerts.</p>
+              {watchedTitles.length > 0 ? <div className="watchedHistoryGrid">{watchedTitles.map((entry) => {
+                const path = titlePath(entry);
+                const art = <span className="watchedHistoryArt" style={entry.posterUrl ? { backgroundImage: `url(${JSON.stringify(entry.posterUrl)})` } : undefined} aria-hidden="true">{!entry.posterUrl && entry.title.slice(0, 1)}</span>;
+                const copy = <span className="watchedHistoryCopy"><strong>{entry.title}</strong><small>{entry.year} · {entry.mediaType === "movie" ? "Movie" : "Series"}{entry.signal === "loved" ? " · Loved" : entry.signal === "not_for_me" ? " · Not for me" : ""}</small></span>;
+                return path ? <a key={entry.id} href={path} onClick={() => rememberTitleNavigation(path)}>{art}{copy}<ArrowIcon /></a>
+                  : <div key={entry.id}>{art}{copy}</div>;
+              })}</div> : <div className="emptyState"><h3>Your watched history starts here</h3><p>Mark a title Watched from its page to keep it here and stop its alerts.</p></div>}
+            </div> : <>
 
             {searchMode === "screen" && activeView === "watchlist" && (
               <section className={`releaseAlertsPanel ${releaseAlertsEnabled ? "enabled" : "disabled"}`} aria-labelledby="release-alerts-title">
@@ -1807,7 +1894,6 @@ export default function Home() {
                     onClick={() => {
                       setReleaseAlertsEnabled((current) => !current);
                       if (releaseAlertsEnabled) {
-                        setReleaseAlerts([]);
                         setReleaseAlertsStatus("idle");
                       }
                     }}
@@ -1864,29 +1950,15 @@ export default function Home() {
                   </div>
                 )}
                 {!releaseAlertsEnabled ? (
-                  <p className="releaseAlertsEmpty">Turn on alerts to track availability, prices, regional releases, and upcoming episodes.</p>
-                ) : watchlist.length === 0 ? (
+                  <p className="releaseAlertsEmpty">Turn on release checks for new episode and regional release dates.</p>
+                ) : activeWatchlistCount === 0 ? (
                   <p className="releaseAlertsEmpty">Save a movie or series to begin tracking availability, prices, and release dates.</p>
-                ) : releaseAlertsStatus === "idle" || releaseAlertsStatus === "loading" ? (
-                  <div className="releaseAlertLoading" aria-label="Checking watchlist release dates"><span /><span /><span /></div>
                 ) : releaseAlertsStatus === "error" ? (
-                  <p className="releaseAlertsEmpty error">{releaseAlertsError}</p>
-                ) : releaseAlerts.length > 0 ? (
-                  <div className="releaseAlertList">
-                    {releaseAlerts.map((alert) => {
-                      const matchingTitle = sourceTitles.find((title) => title.id === alert.titleId);
-                      return (
-                        <button type="button" key={`${alert.titleId}-${alert.kind}-${alert.date}`} onClick={() => matchingTitle && openTitle(matchingTitle)} disabled={!matchingTitle}>
-                          <time dateTime={alert.date}><strong>{formatAlertDate(alert.date).split(" ")[0]}</strong><span>{formatAlertDate(alert.date).split(" ")[1]}</span></time>
-                          <span><small>{alert.label}</small><strong>{alert.title}</strong><em>{alert.detail}</em></span>
-                          <ArrowIcon />
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <p className="releaseAlertsEmpty error" role="status">{releaseAlertsError}</p>
                 ) : (
-                  <p className="releaseAlertsEmpty">You’re caught up. New episode and regional release dates will appear here.</p>
+                  <p className="releaseAlertsEmpty">Release and availability updates appear in Activity.</p>
                 )}
+                {accountUser && <button className="releaseActivityLink" type="button" onClick={() => window.dispatchEvent(new Event("streamfind:open-activity"))}>View activity <ArrowIcon /></button>}
               </section>
             )}
 
@@ -2028,9 +2100,9 @@ export default function Home() {
                           <ArrowIcon />
                         </button>
                       ) : (
-                        <button className="watchRow releasePendingRow" type="button" onClick={() => openTitle(item)} aria-label={`View release tracking for ${item.title}`}>
+                        <button className="watchRow releasePendingRow" type="button" onClick={() => openTitle(item)} aria-label={`View details for ${item.title}`}>
                           <span className="releaseBadge" aria-hidden="true"><BellIcon /></span>
-                          <span className="watchCopy"><small>Not streaming yet</small><strong>{item.releaseDate ? `Expected ${formatAlertDate(item.releaseDate, "long")}` : "Track release"}</strong></span>
+                          <span className="watchCopy"><small>No streaming options listed in {country}</small><strong>View title details</strong></span>
                           <ArrowIcon />
                         </button>
                       )}
@@ -2041,15 +2113,17 @@ export default function Home() {
             ) : (
               <div className="emptyState">
                 <span className="emptyMark" aria-hidden="true"><SearchIcon /></span>
-                <h3>{activeView === "watchlist" ? "Your watchlist is ready for its first title" : `No ${activeCountry.name} streaming options found`}</h3>
+                <h3>{activeView === "watchlist" ? "Your watchlist is ready for its first title" : "No matching titles found"}</h3>
                 <p>{activeView === "watchlist" ? "Save something from Discover and it will stay here on this device." : "Try a more specific title, or search another movie or show."}</p>
                 <button type="button" onClick={clearFilters}>{activeView === "watchlist" ? "Explore titles" : "Clear filters"}</button>
               </div>
             )}
+            {submittedQuery && searchMode === "screen" && nextSearchPage && activeView !== "watchlist" && <div className="searchMore"><button className="secondaryAction" type="button" disabled={moreSearchLoading} onClick={() => void loadMoreSearchResults()}>{moreSearchLoading ? "Loading more titles…" : "Load more matching titles"}</button>{moreSearchError && <p role="alert">{moreSearchError}</p>}</div>}
+            </>}
             </>}
           </>
         )}
-      </section>
+      </section>}
 
       {!accountUser && searchMode === "screen" && <section className="decisionSection" aria-labelledby="decision-title">
         <div>
@@ -2070,16 +2144,17 @@ export default function Home() {
       </footer>
 
       <nav className="mobileNav" aria-label="Mobile navigation">
-        <button type="button" onClick={focusMainSearch}><SearchIcon /><span>Search</span></button>
         <button type="button" className={activeView === "discover" ? "active" : ""} onClick={() => {
           openView("discover");
-          window.setTimeout(() => document.getElementById("discover")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
         }}><DiscoverIcon /><span>Discover</span></button>
-        <button type="button" className={activeView === "watchlist" ? "active" : ""} onClick={() => openView("watchlist")}><BookmarkIcon filled={activeView === "watchlist"} /><span>Watchlist</span>{watchlist.length > 0 && <small>{watchlist.length}</small>}</button>
+        <button type="button" className={activeView === "search" ? "active" : ""} onClick={focusMainSearch}><SearchIcon /><span>Search</span></button>
+        <button type="button" className={activeView === "watchlist" ? "active" : ""} onClick={() => openView("watchlist")}><BookmarkIcon filled={activeView === "watchlist"} /><span>Watchlist</span>{activeWatchlistCount > 0 && <small>{activeWatchlistCount}</small>}</button>
       </nav>
 
       <SocialHub
+        key={`${socialEntryPoint}-${socialOpen}`}
         open={socialOpen}
+        entryPoint={socialEntryPoint}
         onClose={() => setSocialOpen(false)}
         user={accountUser}
         watchlistIds={watchlist}
@@ -2488,6 +2563,7 @@ export default function Home() {
 
 async function syncReleaseNotifications(userId: string, alerts: ReleaseAlert[], titles: Title[]) {
   await Promise.all(alerts.map(async (alert) => {
+    const savedTitle = titles.find((title) => title.id === alert.titleId);
     const safeKey = `${alert.titleId}-${alert.kind}-${alert.date}`.replace(/[^a-zA-Z0-9_-]/g, "-");
     const reference = doc(firestore, "users", userId, "notifications", `release-${safeKey}`);
     if ((await getDoc(reference)).exists()) return;
@@ -2497,8 +2573,9 @@ async function syncReleaseNotifications(userId: string, alerts: ReleaseAlert[], 
       sourceId: safeKey,
       heading: `${alert.title}: ${alert.label}`,
       body: alert.detail,
-      href: titlePath(titles.find((title) => title.id === alert.titleId) ?? { title: alert.title }) ?? "/?view=watchlist",
+      href: titlePath(savedTitle ?? { title: alert.title }) ?? "/?view=watchlist",
       titleId: alert.titleId,
+      ...(savedTitle?.posterUrl ? { imageUrl: savedTitle.posterUrl } : {}),
       createdAt: serverTimestamp(),
     });
   }));

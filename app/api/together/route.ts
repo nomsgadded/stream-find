@@ -1,6 +1,6 @@
 import { FieldValue } from "firebase-admin/firestore";
 import { adminAuth, adminFirestore } from "@/lib/firebase-admin";
-import { durations, groupCandidates, moods, type MemberTaste } from "@/lib/together-data";
+import { durations, groupCandidates, moods, sharedServices, type MemberTaste } from "@/lib/together-data";
 import { getRegionConfig } from "@/lib/regions";
 
 export const maxDuration = 60;
@@ -62,17 +62,20 @@ export async function POST(request: Request) {
         })),
       };
     }));
+    if (!sharedServices(members).length) return Response.json({
+      error: "Everyone needs at least one streaming service in common. Add a shared service in My services, then try again.",
+    }, { status: 422 });
     const candidates = await groupCandidates(members, mood, duration, token);
-    if (!candidates.length) return Response.json({ error: "No included picks matched these services and filters. Try another mood or time, or add a service." }, { status: 422 });
+    if (!candidates.length) return Response.json({ error: "No included picks matched on a shared service for everyone’s region. Try another mood or time." }, { status: 422 });
     const reference = adminFirestore.collection("groupPicks").doc();
     const people = members.map(({ uid, name, region }) => ({ uid, name, region }));
     const batch = adminFirestore.batch();
-    batch.set(reference, { hostUid: user.uid, participantUids: uids, people, region: members[0].region, mood, duration, candidates, votes: {}, status: "open", createdAt: FieldValue.serverTimestamp() });
+    batch.set(reference, { hostUid: user.uid, participantUids: uids, people, region: members[0].region, availabilityMode: "shared", mood, duration, candidates, votes: {}, status: "open", createdAt: FieldValue.serverTimestamp() });
     for (const uid of friendUids as string[]) {
       batch.set(adminFirestore.doc(`users/${uid}/notifications/group-invite-${reference.id}`), {
         type: "group_invite", toUid: uid, actor: { uid: user.uid, displayName: members[0].name },
         heading: `${members[0].name} invited you to pick tonight’s watch`,
-        body: `Vote on ${candidates.length} picks available on your circle’s services.`,
+        body: `Vote on ${candidates.length} picks included on services everyone shares.`,
         href: `/together/${reference.id}`, createdAt: FieldValue.serverTimestamp(),
       });
     }

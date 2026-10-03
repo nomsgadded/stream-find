@@ -78,6 +78,12 @@ export const checkAvailabilityChanges = onSchedule({
   if (!entries.length) return;
 
   const userRefs = new Map(entries.map(({ userRef }) => [userRef.id, userRef]));
+  const watchedByUser = new Map(await Promise.all([...userRefs].map(async ([userId, userRef]) => {
+    const signals = await userRef.collection("tasteSignals").get();
+    return [userId, new Set(signals.docs.filter((signal) => signal.get("watched") === true || signal.get("signal") === "watched").map((signal) => signal.id))];
+  })));
+  const activeEntries = entries.filter(({ entry, userRef }) => !watchedByUser.get(userRef.id)?.has(entry.id));
+  if (!activeEntries.length) return;
   const userSettings = new Map(await Promise.all([...userRefs].map(async ([userId, userRef]) => {
     const settings = (await userRef.collection("settings").doc("app").get()).data() ?? {};
     return [userId, {
@@ -87,9 +93,11 @@ export const checkAvailabilityChanges = onSchedule({
   })));
 
   const uniqueChecks = new Map();
-  for (const item of entries) {
+  for (const item of activeEntries) {
     const settings = userSettings.get(item.userRef.id) ?? { region: "US", currency: "USD" };
-    uniqueChecks.set(`${settings.region}:${item.watchmodeId}`, { watchmodeId: item.watchmodeId, region: settings.region });
+    for (const id of titleWatchmodeIds(item.title, item.watchmodeId)) {
+      uniqueChecks.set(`${settings.region}:${id}`, { watchmodeId: id, region: settings.region });
+    }
   }
   const availability = new Map();
   await mapWithConcurrency([...uniqueChecks], 6, async ([key, request]) => {
@@ -97,10 +105,13 @@ export const checkAvailabilityChanges = onSchedule({
     if (offers) availability.set(key, offers);
   });
 
-  await mapWithConcurrency(entries, 8, async ({ entry, userRef, title, watchmodeId }) => {
+  await mapWithConcurrency(activeEntries, 8, async ({ entry, userRef, title, watchmodeId }) => {
     const settings = userSettings.get(userRef.id) ?? { region: "US", currency: "USD" };
-    const offers = availability.get(`${settings.region}:${watchmodeId}`);
-    if (!offers) return;
+    const ids = titleWatchmodeIds(title, watchmodeId);
+    // An incomplete catalog response must not generate false removal alerts.
+    if (ids.some((id) => !availability.has(`${settings.region}:${id}`))) return;
+    const offers = [...new Map(ids.flatMap((id) => availability.get(`${settings.region}:${id}`))
+      .map((offer) => [`${offer.provider}:${offer.type}:${offer.price ?? ""}`, offer])).values()];
 
     const snapshotRef = userRef.collection("availabilitySnapshots").doc(entry.id);
     const previousSnapshot = await snapshotRef.get();
@@ -133,6 +144,7 @@ export const checkAvailabilityChanges = onSchedule({
           type: primary.type,
           toUid: userRef.id,
           sourceId: `${entry.id}:${signature}`,
+          titleId: Number(title.id),
           heading: availabilityHeading(String(title.title), primary),
           body: `${primary.message}${changes.length > 1 ? ` Plus ${changes.length - 1} more change${changes.length === 2 ? "" : "s"}.` : ""}`,
           href: titleHref(title, watchmodeId),
@@ -164,8 +176,10 @@ export const sendReleaseAlerts = onSchedule({
     if (subscriptionDoc.get("enabled") !== true) continue;
     const userRef = subscriptionDoc.ref.parent.parent;
     if (!userRef) continue;
-    const watchlistSnapshot = await userRef.collection("watchlist").limit(12).get();
-    const titles = watchlistSnapshot.docs.map((entry) => {
+    const watchlistSnapshot = await userRef.collection("watchlist").limit(100).get();
+    const signals = await userRef.collection("tasteSignals").get();
+    const watchedIds = new Set(signals.docs.filter((signal) => signal.get("watched") === true || signal.get("signal") === "watched").map((signal) => signal.id));
+    const titles = watchlistSnapshot.docs.filter((entry) => !watchedIds.has(entry.id)).map((entry) => {
       const title = entry.data();
       return {
         id: Number(title.id),
@@ -173,8 +187,9 @@ export const sendReleaseAlerts = onSchedule({
         year: Number(title.year) || undefined,
         mediaType: title.mediaType === "show" ? "show" : "movie",
         tmdbId: Number(title.tmdbId) || undefined,
+        posterUrl: typeof title.posterUrl === "string" ? title.posterUrl : undefined,
       };
-    }).filter((title) => Number.isSafeInteger(title.id) && title.title);
+    }).filter((title) => Number.isSafeInteger(title.id) && title.title).slice(0, 12);
     if (!titles.length) continue;
 
     const response = await fetch(ALERTS_URL, {
@@ -196,6 +211,7 @@ export const sendReleaseAlerts = onSchedule({
     await Promise.all(newAlerts.map(async (alert) => {
       const notificationRef = userRef.collection("notifications").doc(`release-${safeId(alertKey(alert))}`);
       if ((await notificationRef.get()).exists) return;
+      const savedTitle = titles.find((title) => title.id === alert.titleId);
       await notificationRef.set({
         type: "release_alert",
         toUid: userRef.id,
@@ -204,6 +220,7 @@ export const sendReleaseAlerts = onSchedule({
         body: alert.detail,
         href: releaseHref(alert, titles),
         titleId: alert.titleId,
+        ...(savedTitle?.posterUrl ? { imageUrl: savedTitle.posterUrl } : {}),
         createdAt: FieldValue.serverTimestamp(),
       });
     }));
@@ -235,6 +252,11 @@ export const sendReleaseAlerts = onSchedule({
 
 function alertKey(alert) {
   return `${alert.titleId}:${alert.kind}:${alert.date}`;
+}
+
+function titleWatchmodeIds(title, primaryId) {
+  return [...new Set([primaryId, ...(Array.isArray(title.watchmodeIds) ? title.watchmodeIds : [])])]
+    .filter((id) => Number.isSafeInteger(id) && id > 0).slice(0, 8);
 }
 
 function safeId(value) {

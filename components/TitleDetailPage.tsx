@@ -49,7 +49,7 @@ type Season = { seasonNumber: number; episodeCount: number; availableEpisodeCoun
 type SimilarTitle = { watchmodeId?: number; tmdbId?: number; title: string; year: number; mediaType: "movie" | "show"; score: number; posterUrl?: string; backdropUrl?: string };
 type FriendProfile = { uid: string; displayName: string; username: string; photoURL?: string };
 type TasteSignal = "watched" | "loved" | "not_for_me";
-type TasteEntry = { signal: TasteSignal; id: number; title: string; year: number; mediaType: "movie" | "show"; genres: string[]; tmdbId?: number; watchmodeId?: number; updatedAt?: string };
+type TasteEntry = { signal: TasteSignal; id: number; title: string; year: number; mediaType: "movie" | "show"; genres: string[]; tmdbId?: number; watchmodeId?: number; posterUrl?: string; watched?: boolean; updatedAt?: string };
 const sectionNames: Record<string, string> = {
   "title-overview": "Overview",
   "about-title": "About",
@@ -83,6 +83,7 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
   const [recommendMessage, setRecommendMessage] = useState("");
   const [recommendBusy, setRecommendBusy] = useState(false);
   const [tasteSignal, setTasteSignalState] = useState<TasteSignal | null>(null);
+  const [watched, setWatched] = useState(false);
   const [toast, setToast] = useState("");
   const sectionsRef = useRef<HTMLDetailsElement>(null);
   const desktopSectionsRef = useRef<HTMLElement>(null);
@@ -202,15 +203,16 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
         const data = await response.json() as { titles?: Title[]; error?: string };
         if (!response.ok || !data.titles?.[0]) throw new Error(data.error || "That title is not currently available in this region.");
         const loadedTitle = data.titles[0];
+        const resolvedWatchmodeId = loadedTitle.watchmodeId ?? route.sourceId;
         setTitle(loadedTitle);
         setCredits([]);
         setSeasons([]);
         setSimilar([]);
         setStatus("ready");
         void Promise.allSettled([
-          fetch(`/api/cast?id=${route.sourceId}&v=2`, { signal: controller.signal }).then((result) => result.ok ? result.json() as Promise<{ credits?: Credit[] }> : { credits: [] }),
+          fetch(`/api/cast?id=${resolvedWatchmodeId}&v=2`, { signal: controller.signal }).then((result) => result.ok ? result.json() as Promise<{ credits?: Credit[] }> : { credits: [] }),
           loadedTitle.mediaType === "show"
-            ? fetch(`/api/seasons?id=${route.sourceId}&region=${region}`, { signal: controller.signal }).then((result) => result.ok ? result.json() as Promise<{ seasons?: Season[] }> : { seasons: [] })
+            ? fetch(`/api/seasons?id=${resolvedWatchmodeId}&region=${region}`, { signal: controller.signal }).then((result) => result.ok ? result.json() as Promise<{ seasons?: Season[] }> : { seasons: [] })
             : Promise.resolve({ seasons: [] as Season[] }),
           loadedTitle.similarTitleIds?.length
             ? fetch(`/api/similar?ids=${loadedTitle.similarTitleIds.slice(0, 6).join(",")}`, { signal: controller.signal }).then((result) => result.ok ? result.json() as Promise<{ titles?: SimilarTitle[] }> : { titles: [] })
@@ -255,7 +257,10 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
     if (!title) return;
     let cancelled = false;
     const local = readTasteSignals()[String(title.id)];
-    const frame = window.requestAnimationFrame(() => setTasteSignalState(local?.signal ?? null));
+    const frame = window.requestAnimationFrame(() => {
+      setTasteSignalState(local?.signal ?? null);
+      setWatched(local?.watched === true || local?.signal === "watched");
+    });
     if (!accountUser) return () => window.cancelAnimationFrame(frame);
     void getDoc(doc(firestore, "users", accountUser.uid, "tasteSignals", String(title.id)))
       .then((snapshot) => {
@@ -265,6 +270,7 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
         signals[String(title.id)] = entry;
         window.localStorage.setItem("streamfind.tasteSignals", JSON.stringify(signals));
         setTasteSignalState(entry.signal);
+        setWatched(entry.watched === true || entry.signal === "watched");
       })
       .catch(() => undefined);
     return () => { cancelled = true; window.cancelAnimationFrame(frame); };
@@ -346,16 +352,22 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
 
   const updateTasteSignal = async (signal: TasteSignal) => {
     if (!title) return;
-    const next = tasteSignal === signal ? null : signal;
+    const nextWatched = signal === "watched" ? !watched : watched;
+    let next: TasteSignal | null = signal === "watched"
+      ? nextWatched ? tasteSignal && tasteSignal !== "watched" ? tasteSignal : "watched" : tasteSignal === "watched" ? null : tasteSignal
+      : tasteSignal === signal ? null : signal;
+    if (nextWatched && !next) next = "watched";
     const signals = readTasteSignals();
     if (next) {
       signals[String(title.id)] = {
         signal: next,
+        watched: nextWatched,
         id: title.id,
         title: title.title,
         year: title.year,
         mediaType: title.mediaType,
         genres: title.genres,
+        ...(title.posterUrl ? { posterUrl: title.posterUrl } : {}),
         ...(title.tmdbId ? { tmdbId: title.tmdbId } : {}),
         ...(title.watchmodeId ? { watchmodeId: title.watchmodeId } : {}),
         updatedAt: new Date().toISOString(),
@@ -363,12 +375,13 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
     } else delete signals[String(title.id)];
     window.localStorage.setItem("streamfind.tasteSignals", JSON.stringify(signals));
     setTasteSignalState(next);
+    setWatched(nextWatched);
     if (accountUser) {
       const reference = doc(firestore, "users", accountUser.uid, "tasteSignals", String(title.id));
       if (next) await setDoc(reference, { ...signals[String(title.id)], updatedAt: serverTimestamp() });
       else await deleteDoc(reference);
     }
-    showToast(next === "loved" ? "Added to your taste profile" : next === "watched" ? "Marked as watched" : next === "not_for_me" ? "We’ll show fewer titles like this" : "Taste signal removed");
+    showToast(signal === "watched" ? nextWatched ? "Moved to Watched; alerts paused" : "Moved back to your active watchlist" : next === "loved" ? "Added to your taste profile" : next === "not_for_me" ? "We’ll show fewer titles like this" : "Taste signal removed");
   };
 
   const sendRecommendation = async () => {
@@ -402,6 +415,7 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
           toUid,
           actor: sender,
           recommendationId: recommendationRef.id,
+          titleId: title.id,
           heading: `${sender.displayName} sent you a recommendation`,
           body: recommendMessage.trim().slice(0, 240) || `Watch ${title.title}`,
           href: window.location.pathname,
@@ -475,7 +489,7 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
             </div>
             <div className="tasteActions" aria-label="Personalize recommendations">
               <span>Shape your recommendations</span>
-              <button className={tasteSignal === "watched" ? "active" : ""} type="button" aria-pressed={tasteSignal === "watched"} onClick={() => void updateTasteSignal("watched")}><svg className="tasteIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></svg><span>Watched</span></button>
+              <button className={watched ? "active" : ""} type="button" aria-pressed={watched} onClick={() => void updateTasteSignal("watched")}><svg className="tasteIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></svg><span>Watched</span></button>
               <button className={tasteSignal === "loved" ? "active loved" : ""} type="button" aria-pressed={tasteSignal === "loved"} onClick={() => void updateTasteSignal("loved")}><svg className="tasteIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21.3l8.8-8.9a5.5 5.5 0 0 0 0-7.8Z" /></svg><span>Loved</span></button>
               <button className={tasteSignal === "not_for_me" ? "active negative" : ""} type="button" aria-pressed={tasteSignal === "not_for_me"} onClick={() => void updateTasteSignal("not_for_me")}><svg className="tasteIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M17 14V3H6.4a2 2 0 0 0-1.9 1.4L2 12.1a2 2 0 0 0 1.9 2.6H9l-.8 4.1a2 2 0 0 0 .5 1.8l1 1.1 6.3-7.7H17Z" /><path d="M17 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-3" /></svg><span>Not for me</span></button>
             </div>
@@ -519,7 +533,7 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
               })}
             </div>
           ) : (
-            <div className="releaseNotice"><strong>Streaming availability has not been announced yet.</strong><p>{title.releaseDate ? `Expected ${formatDate(title.releaseDate)}. Save it to receive release alerts.` : "Save this title and Stream Find will continue checking."}</p></div>
+            <div className="releaseNotice"><strong>No streaming options are currently listed in {region}.</strong><p>Save this title and Stream Find will continue checking.</p></div>
           )}
         </section>
 

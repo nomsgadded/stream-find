@@ -61,7 +61,7 @@ export async function GET(request: Request) {
     return Response.json({ error: "Choose shows, movies, or people." }, { status: 400 });
   }
   const requestedGenre = url.searchParams.get("genre") ?? "all";
-  if (!["all", "k-drama", "anime", "comedy", "crime", "documentary"].includes(requestedGenre) || (requestedGenre === "k-drama" && kind !== "show") || (kind === "person" && requestedGenre !== "all")) {
+  if (!["all", "k-drama", "anime", "comedy", "crime", "documentary"].includes(requestedGenre) || (kind === "person" && requestedGenre !== "all")) {
     return Response.json({ error: "Choose an available genre." }, { status: 400 });
   }
   const genre = requestedGenre as Genre;

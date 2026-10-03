@@ -76,7 +76,12 @@ a { color: inherit; text-decoration: none; }
 .activityDrawer > header { min-height: 92px; padding: 21px 22px 17px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
 .activityDrawer > header p { margin: 0 0 4px; color: var(--amber-soft); font-size: 8px; font-weight: 760; letter-spacing: .15em; text-transform: uppercase; }
 .activityDrawer > header h2 { margin: 0; font-family: Georgia, serif; font-size: 30px; font-weight: 400; letter-spacing: -.025em; }
-.activityDrawer > header button { width: 36px; height: 36px; border: 1px solid rgba(255,255,255,.13); border-radius: 50%; background: transparent; color: #aaa7a1; font-size: 22px; cursor: pointer; }
+.activityHeaderActions { display: flex; align-items: center; gap: 9px; }
+.activityHeaderActions button { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.13); border-radius: 50%; background: transparent; color: #aaa7a1; font-size: 22px; cursor: pointer; }
+.activityHeaderActions button:hover, .activityHeaderActions button:focus-visible { border-color: rgba(244,184,63,.4); color: var(--amber-soft); }
+.activityHeaderActions button:disabled { opacity: .45; cursor: wait; }
+.activityClearAll svg { width: 18px; height: 18px; }
+.activityClearError { margin: 12px 22px; color: #dfaaa7; font-size: 11px; }
 .activityTools { min-height: 48px; padding: 0 22px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); color: #77746e; font-size: 9px; font-weight: 680; letter-spacing: .06em; text-transform: uppercase; }
 .activityTools button { padding: 0; border: 0; background: transparent; color: var(--amber-soft); font-size: 9px; font-weight: 720; cursor: pointer; }
 .activityList { overflow-y: auto; }
@@ -179,6 +184,7 @@ a { color: inherit; text-decoration: none; }
 .memberHero .heroContent { width: min(860px, 100%); margin: 0; }
 .memberHero .heroBackdrop { opacity: .2; }
 .memberHero .heroGlow, .memberHero .availabilityPreview, .memberHero .searchHints { display: none; }
+.memberExperience.watchlistView .discoverSection { padding-top: 132px; }
 .hero.memberHero h1 { font-size: clamp(32px, 4vw, 52px); line-height: 1.15; letter-spacing: -.035em; }
 .memberHero .eyebrow { margin-bottom: 14px; }
 .memberHero .heroCopy { margin: 12px 0 22px; font-size: 14px; }
@@ -186,13 +192,6 @@ a { color: inherit; text-decoration: none; }
 .memberHeading { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; }
 .memberHeading h2 { margin: 0; font-size: 23px; font-weight: 550; }
 .memberHeading button { border: 0; background: none; color: var(--amber-soft); padding: 10px 0; font-size: 13px; cursor: pointer; }
-.memberUpdates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.memberUpdates a { display: flex; align-items: center; gap: 14px; border: 1px solid #ffffff18; border-radius: 12px; padding: 14px; text-decoration: none; color: inherit; }
-.memberUpdates a > span:nth-last-child(2) { flex: 1; min-width: 0; }
-.memberUpdates strong, .memberUpdates small { display: block; }
-.memberUpdates strong { font-size: 14px; line-height: 1.4; }
-.memberUpdates small { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 5px; }
-.memberUpdateArt { width: 42px; height: 62px; flex-shrink: 0; border-radius: 5px; background-size: cover; background-position: center; }
 .memberHome .discoveryCard { text-decoration: none; color: inherit; }
 .memberSetup { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 18px 22px; border-radius: 12px; background: #ffffff05; border: 1px solid #ffffff12; }
 .memberSetup p { color: var(--muted); margin: 5px 0 0; font-size: 13px; }
@@ -201,10 +200,10 @@ a { color: inherit; text-decoration: none; }
 .memberDataNotice { color: var(--muted); font-size: 13px; }
 @media (max-width: 700px) {
   .hero.memberHero { padding: 100px 19px 24px; }
+  .memberExperience.watchlistView .discoverSection { padding-top: 120px; }
   .memberHome { padding: 0 19px; gap: 26px; }
   .memberHeading h2 { font-size: 20px; }
   .memberHeading button { font-size: 12px; white-space: nowrap; }
-  .memberUpdates { grid-template-columns: 1fr; }
   .memberSetup { align-items: flex-start; flex-direction: column; padding: 16px; gap: 14px; }
 }
 .eyebrow, .sectionKicker { color: var(--amber-soft); font-size: 11px; font-weight: 730; text-transform: uppercase; letter-spacing: .2em; }
@@ -421,6 +420,19 @@ a { color: inherit; text-decoration: none; }
 .discoveryLoading span::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.06), transparent); animation: skeletonSweep 1.3s ease-in-out infinite; }
 .clearButton { padding: 9px 13px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: #b7b5b0; font-size: 12px; cursor: pointer; }
 .filterBar { margin-bottom: 22px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.watchlistStateTabs { display: flex; gap: 7px; width: fit-content; margin: 0 0 28px; padding: 4px; border: 1px solid var(--line); border-radius: 11px; background: #111115; }
+.watchlistStateTabs button { min-height: 39px; padding: 0 16px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 8px; background: transparent; color: #9c9993; font-size: 12px; font-weight: 650; cursor: pointer; }
+.watchlistStateTabs button.active { background: #f0ede6; color: #161619; }
+.watchlistStateTabs button span { font-size: 10px; opacity: .68; }
+.watchedHistory > p { margin: 0 0 21px; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.watchedHistoryGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.watchedHistoryGrid > a, .watchedHistoryGrid > div { min-width: 0; min-height: 92px; padding: 10px; display: flex; align-items: center; gap: 14px; border: 1px solid var(--line); border-radius: 11px; background: #101014; }
+.watchedHistoryGrid > a:hover, .watchedHistoryGrid > a:focus-visible { border-color: rgba(244,184,63,.4); }
+.watchedHistoryArt { width: 49px; height: 70px; flex: 0 0 49px; display: grid; place-items: center; border-radius: 6px; background: #28231b center / cover no-repeat; color: var(--amber-soft); font-family: Georgia, serif; font-size: 28px; }
+.watchedHistoryCopy { min-width: 0; flex: 1; display: grid; gap: 6px; }
+.watchedHistoryCopy strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.watchedHistoryCopy small { color: var(--muted); font-size: 11px; }
+.watchedHistoryGrid .icon { width: 16px; color: #77746f; }
 .mediaFilters, .accessFilters { display: flex; align-items: center; gap: 6px; }
 .mediaFilters { padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: #111115; }
 .mediaFilters button, .accessFilters button { border: 0; background: transparent; color: #8f8d88; cursor: pointer; }
@@ -453,21 +465,9 @@ a { color: inherit; text-decoration: none; }
 .releaseAlertsPanel.disabled .releaseAlertToggle > span { background: #55534f; box-shadow: none; }
 .releaseAlertsEmpty { margin: 17px 0 0 54px; color: #85827d; font-size: 12px; line-height: 1.6; }
 .releaseAlertsEmpty.error { color: #e2bd7d; }
-.releaseAlertList { margin-top: 18px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
-.releaseAlertList > button { min-width: 0; min-height: 82px; padding: 10px; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 11px; border: 1px solid rgba(255,255,255,.1); border-radius: 10px; background: rgba(10,10,13,.7); color: inherit; text-align: left; cursor: pointer; }
-.releaseAlertList > button:hover { border-color: rgba(244,184,63,.35); }
-.releaseAlertList time { width: 44px; height: 54px; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 8px; background: #242018; color: var(--amber-soft); }
-.releaseAlertList time strong { font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
-.releaseAlertList time span { font-family: Georgia, serif; font-size: 19px; }
-.releaseAlertList > button > span:nth-child(2) { min-width: 0; display: grid; gap: 3px; }
-.releaseAlertList small { color: var(--amber-soft); font-size: 8px; font-weight: 720; text-transform: uppercase; letter-spacing: .08em; }
-.releaseAlertList strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.releaseAlertList em { overflow: hidden; color: #777570; font-size: 9px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
-.releaseAlertList > button > .icon { width: 15px; color: #676560; }
-.releaseAlertLoading { margin: 18px 0 0 54px; display: flex; gap: 7px; }
-.releaseAlertLoading span { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); animation: creditsPulse 1.2s ease-in-out infinite; }
-.releaseAlertLoading span:nth-child(2) { animation-delay: .15s; }
-.releaseAlertLoading span:nth-child(3) { animation-delay: .3s; }
+.releaseActivityLink { margin: 12px 0 0 54px; padding: 0; display: inline-flex; align-items: center; gap: 5px; border: 0; background: none; color: var(--amber-soft); font-size: 11px; font-weight: 700; cursor: pointer; }
+.releaseActivityLink .icon { width: 14px; }
+.releaseActivityLink:hover { text-decoration: underline; }
 .deviceAlertRow { margin: 16px 0 0 54px; padding: 13px 14px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid rgba(255,255,255,.08); border-radius: 10px; background: rgba(8,8,11,.52); }
 .deviceAlertRow > div { min-width: 0; display: grid; gap: 3px; }
 .deviceAlertRow strong { color: #dedbd4; font-size: 12px; }
@@ -1051,7 +1051,6 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
   .discoveryLoading { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .discoveryLoading span:nth-child(n+5) { display: none; }
   .musicVideoGrid, .musicSkeletonGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .releaseAlertList { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .titleHeroContent { grid-template-columns: 150px minmax(0, 1fr); }
   .titlePoster { width: 150px; }
 }
@@ -1081,6 +1080,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
   .serviceStrip, .discoverSection { padding-left: 19px; padding-right: 19px; }
   .serviceChip:nth-of-type(n+4) { display: none; }
   .titleGrid { grid-template-columns: 1fr; gap: 28px; }
+  .watchedHistoryGrid { grid-template-columns: 1fr; }
   .skeletonGrid { grid-template-columns: 1fr; gap: 28px; }
   .musicVideoGrid, .musicSkeletonGrid { grid-template-columns: 1fr; gap: 24px; }
   .musicFilterBar { margin-right: -19px; padding-right: 19px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
@@ -1088,8 +1088,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
   .musicFilterBar button { flex: 0 0 auto; }
   .musicSearchStart { min-height: 250px; padding: 30px 22px; align-items: flex-start; flex-direction: column; }
   .releaseAlertsPanel { margin-top: 0; padding: 16px; }
-  .releaseAlertList { grid-template-columns: 1fr; }
-  .releaseAlertsEmpty, .releaseAlertLoading, .deviceAlertRow, .availabilityTrackingRow { margin-left: 0; }
+  .releaseAlertsEmpty, .releaseActivityLink, .deviceAlertRow, .availabilityTrackingRow { margin-left: 0; }
   .deviceAlertRow { align-items: flex-start; }
   .poster { aspect-ratio: 1.48 / 1; }
   .discoverSection { padding-top: 64px; }
@@ -1461,3 +1460,14 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
   .personalizedFeed { padding: 18px; }
   .discoveryLoading.compact { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
+/* Only the hydrated scroll observer marks offscreen content for reveal. */
+[data-scroll-pending] { opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  [data-scroll-pending] { opacity: 1; }
+}
+
+.searchMore { display: grid; justify-items: center; gap: 12px; margin: 28px 0 8px; }
+.searchMore p { color: var(--muted); font-size: 13px; }
+.circleSectionHeading { margin: 24px 0 14px; }
+.circleSectionHeading h3 { margin: 0 0 6px; color: var(--paper); font-family: Georgia, serif; font-size: 24px; font-weight: 400; }
+.circleSectionHeading p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }

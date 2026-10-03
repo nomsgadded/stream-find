@@ -1,3 +1,5 @@
+import { groupTitleRecords } from "@/lib/title-records";
+
 const WATCHMODE_API = "https://api.watchmode.com/v1";
 const MAX_RESULTS = 6;
 
@@ -8,6 +10,8 @@ type WatchmodeAutocompleteResult = {
   result_type?: string | null;
   type?: string | null;
   year?: number | null;
+  tmdb_id?: number;
+  imdb_id?: string;
 };
 
 type WatchmodeAutocompleteResponse = {
@@ -44,7 +48,7 @@ export async function GET(request: Request) {
     }
 
     const data = await response.json() as WatchmodeAutocompleteResponse;
-    const results = (data.results ?? [])
+    const candidates = (data.results ?? [])
       .filter((result) => result.result_type === "title" || typeof result.id === "number")
       .flatMap((result) => {
         const id = result.id;
@@ -58,9 +62,11 @@ export async function GET(request: Request) {
           ...(typeof result.year === "number" ? { year: result.year } : {}),
           mediaType: result.type?.includes("movie") ? "movie" as const : "show" as const,
           ...(imageUrl ? { imageUrl } : {}),
+          ...(result.tmdb_id ? { tmdbId: result.tmdb_id } : {}),
+          ...(result.imdb_id ? { imdbId: result.imdb_id } : {}),
         }];
-      })
-      .slice(0, MAX_RESULTS);
+      });
+    const results = groupTitleRecords(candidates).map((group) => group.find((item) => item.imageUrl) ?? group[0]).slice(0, MAX_RESULTS);
 
     return Response.json(
       { results },

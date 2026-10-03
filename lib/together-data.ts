@@ -16,6 +16,7 @@ export type GroupCandidate = {
 
 const moodGenres: Record<string, { movie: string; show: string }> = {
   Funny: { movie: "35", show: "35" },
+  "Rom-com": { movie: "35,10749", show: "35" },
   Thrilling: { movie: "53", show: "80" },
   Heartwarming: { movie: "10749|10751", show: "10751|35" },
   "Sci-fi": { movie: "878", show: "10765" },
@@ -27,6 +28,13 @@ const genreNames: Record<number, string> = {
 export const moods = ["Any", ...Object.keys(moodGenres)];
 export const durations = ["Any", "Under 2 hours", "One episode"];
 
+export function sharedServices(members: Pick<MemberTaste, "services">[]) {
+  if (!members.length) return [];
+  const [first, ...others] = members;
+  return [...new Set(first.services.map(normalizedService).filter(Boolean))]
+    .filter((service) => others.every((member) => member.services.some((name) => normalizedService(name) === service)));
+}
+
 async function tmdb<T>(path: string, token: string, params: Record<string, string> = {}): Promise<T> {
   const url = new URL(`${API}${path}`);
   url.searchParams.set("language", "en-US");
@@ -37,10 +45,15 @@ async function tmdb<T>(path: string, token: string, params: Record<string, strin
 }
 
 export async function groupCandidates(members: MemberTaste[], mood: string, duration: string, token: string) {
+  if (!members.length) return [];
   const region = getRegionConfig(members[0].region).code;
-  const localMembers = members.filter((member) => member.region === region);
-  const services = [...new Set(localMembers.flatMap((member) => member.services.map(normalizedService)))];
+  const services = sharedServices(members);
   if (!services.length) return [];
+  // TV has no Romance genre in TMDB, so combine Comedy with its romance keyword.
+  const romanceKeyword = mood === "Rom-com"
+    ? (await tmdb<{ results?: Array<{ id: number; name: string }> }>("/search/keyword", token, { query: "romance" }).catch(() => ({ results: [] })))
+      .results?.find((keyword) => keyword.name.toLowerCase() === "romance")?.id
+    : undefined;
   const types = duration === "One episode" ? ["show" as const] : ["movie" as const, "show" as const];
   const results = await Promise.all(types.map(async (mediaType) => {
     const endpoint = mediaType === "show" ? "tv" : "movie";
@@ -52,6 +65,10 @@ export async function groupCandidates(members: MemberTaste[], mood: string, dura
       sort_by: "popularity.desc", include_adult: "false", "vote_count.gte": "30",
     };
     if (moodGenres[mood]) parameters.with_genres = moodGenres[mood][mediaType];
+    if (mood === "Rom-com" && mediaType === "show") {
+      if (!romanceKeyword) return [];
+      parameters.with_keywords = String(romanceKeyword);
+    }
     if (duration === "Under 2 hours") parameters["with_runtime.lte"] = "120";
     const titles = await tmdb<{ results?: TmdbTitle[] }>(`/discover/${endpoint}`, token, parameters);
     return (titles.results ?? []).filter((item) => item.id && item.poster_path && (item.title || item.name)).slice(0, 12).map((item) => ({ ...item, mediaType }));
@@ -64,18 +81,20 @@ export async function groupCandidates(members: MemberTaste[], mood: string, dura
     try {
       const response = await tmdb<Availability>(`/${mediaType === "show" ? "tv" : "movie"}/${item.id}/watch/providers`, token);
       const listed = response.results?.[region]?.flatrate ?? [];
-      const offered = new Set(listed.map((provider) => normalizedService(provider.provider_name)));
-      const matched = localMembers.filter((member) => member.services.some((name) => offered.has(normalizedService(name))));
-      if (!matched.length) return null;
-      const availableOn = [...new Set(listed.filter((provider) => services.includes(normalizedService(provider.provider_name))).map((provider) => provider.provider_name))];
+      const availableOn = [...new Set(listed.filter((provider) => {
+        const service = normalizedService(provider.provider_name);
+        return services.includes(service) && members.every((member) =>
+          (response.results?.[member.region]?.flatrate ?? []).some((offer) => normalizedService(offer.provider_name) === service));
+      }).map((provider) => provider.provider_name))];
+      if (!availableOn.length) return null;
       const savedBy = members.filter((member) => member.saved.has(key)).map((member) => member.name);
       const titleGenres = (item.genre_ids ?? []).map((id) => genreNames[id]?.toLowerCase());
       const taste = members.reduce((total, member) => total + member.genres.filter((name) => titleGenres.includes(name.toLowerCase())).length, 0);
-      const rank = matched.length * 20 + savedBy.length * 8 + taste * 2
+      const rank = savedBy.length * 8 + taste * 2
         + (item.vote_average ?? 0) + Math.log10((item.popularity ?? 0) + 1) * 2;
-      const reason = `${matched.length} of ${localMembers.length} ${localMembers.length === 1 ? "person has" : "people have"} an included service in ${region}${savedBy.length ? ` · ${savedBy.length} saved it` : ""}`;
+      const reason = `${members.length === 1 ? "Included on your service" : "Included on a service everyone has"}${savedBy.length ? ` · ${savedBy.length} saved it` : ""}`;
       return { key, tmdbId: item.id, mediaType, title, year: Number((item.release_date || item.first_air_date || "").slice(0, 4)) || undefined,
-        posterUrl: `${IMAGE}/w342${item.poster_path}`, availableOn, includedFor: matched.length, savedBy, reason, rank };
+        posterUrl: `${IMAGE}/w342${item.poster_path}`, availableOn, includedFor: members.length, savedBy, reason, rank };
     } catch { return null; }
   }));
   return candidates.filter((item): item is GroupCandidate => Boolean(item))

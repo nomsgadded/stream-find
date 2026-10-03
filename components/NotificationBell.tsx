@@ -3,14 +3,14 @@
 import ModalDialog from "@/components/ModalDialog";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { User } from "firebase/auth";
 import {
   collection,
   doc,
   getDoc,
-  limit,
+  getDocs,
   onSnapshot,
   orderBy,
   query,
@@ -22,7 +22,8 @@ import {
 } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { activityHref, releaseTitleId } from "@/lib/activity-links";
-import { titlePath, type TitleRouteInput } from "@/lib/title-routes";
+import { parseTitleKey, titlePath, type TitleRouteInput } from "@/lib/title-routes";
+import { resolveTitleArtwork, type ArtworkInput } from "@/lib/title-artwork";
 import { rememberTitleNavigation } from "@/lib/title-navigation";
 
 type NotificationType = "recommendation" | "friend_request" | "friend_accepted" | "group_invite" | "release_alert" | "availability_included" | "availability_free" | "availability_new" | "availability_price_drop" | "availability_removed";
@@ -34,6 +35,7 @@ type ActivityNotification = {
   href: string;
   sourceId?: string;
   titleId?: number;
+  recommendationId?: string;
   imageUrl?: string;
   actor?: { displayName?: string; photoURL?: string };
   createdAt?: Timestamp;
@@ -56,13 +58,16 @@ export default function NotificationBell({ user }: { user: User | null }) {
   const [notifications, setNotifications] = useState<ActivityNotification[]>([]);
   const [preferences, setPreferences] = useState(defaultPreferences);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [clearError, setClearError] = useState("");
+  const [legacyArtwork, setLegacyArtwork] = useState<Record<string, string>>({});
+  const artworkChecked = useRef(new Set<string>());
 
   useEffect(() => {
     if (!user) return;
     const activityQuery = query(
       collection(firestore, "users", user.uid, "notifications"),
       orderBy("createdAt", "desc"),
-      limit(40),
     );
     return onSnapshot(activityQuery, (snapshot) => {
       setNotifications(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() } as ActivityNotification)));
@@ -92,8 +97,44 @@ export default function NotificationBell({ user }: { user: User | null }) {
     return () => document.removeEventListener("keydown", close);
   }, [open]);
 
+  useEffect(() => {
+    if (!user) return;
+    const openActivity = () => setOpen(true);
+    window.addEventListener("streamfind:open-activity", openActivity);
+    return () => window.removeEventListener("streamfind:open-activity", openActivity);
+  }, [user]);
+
   const visible = useMemo(() => user ? notifications.filter((item) => !item.dismissedAt) : [], [notifications, user]);
   const unread = visible.filter((item) => !item.readAt).length;
+
+  useEffect(() => {
+    if (!user || !open) return;
+    const missing = visible.filter((item) => {
+      const key = `${user.uid}:${item.id}`;
+      if (item.imageUrl || artworkChecked.current.has(key)) return false;
+      return activityTitleId(item) !== null || Boolean(item.href.startsWith("/title/")) || (item.type === "recommendation" && Boolean(item.recommendationId));
+    });
+    if (!missing.length) return;
+    missing.forEach((item) => artworkChecked.current.add(`${user.uid}:${item.id}`));
+    void Promise.all(missing.map(async (item) => {
+      try {
+        const titleId = activityTitleId(item);
+        const reference = titleId !== null
+          ? doc(firestore, "users", user.uid, "watchlist", String(titleId))
+          : item.recommendationId ? doc(firestore, "recommendations", item.recommendationId) : null;
+        const data = reference ? (await getDoc(reference)).data() : undefined;
+        const savedTitle = titleId !== null ? data : data?.title;
+        const route = parseTitleKey(item.href.split("?")[0].replace(/^\/title\//, ""));
+        const input = savedTitle?.title && ["movie", "show"].includes(savedTitle.mediaType)
+          ? savedTitle as ArtworkInput
+          : route?.source === "tmdb" ? { title: route.titleHint, mediaType: route.mediaType!, tmdbId: route.sourceId } : null;
+        const image = input ? (await resolveTitleArtwork(input)).posterUrl : undefined;
+        return [item.id, typeof image === "string" ? image : ""] as const;
+      } catch { return [item.id, ""] as const; }
+    })).then((found) => {
+      setLegacyArtwork((current) => ({ ...current, ...Object.fromEntries(found.map(([id, image]) => [`${user.uid}:${id}`, image])) }));
+    });
+  }, [open, user, visible]);
 
   const openBell = () => {
     if (!user) {
@@ -138,6 +179,28 @@ export default function NotificationBell({ user }: { user: User | null }) {
     });
   };
 
+  const clearAll = async () => {
+    if (!user || clearing) return;
+    setClearing(true);
+    setClearError("");
+    try {
+      // The drawer only subscribes to the most recent items. Include older activity too.
+      const snapshot = await getDocs(collection(firestore, "users", user.uid, "notifications"));
+      const pending = snapshot.docs.filter((entry) => !entry.data().dismissedAt);
+      for (let index = 0; index < pending.length; index += 400) {
+        const batch = writeBatch(firestore);
+        pending.slice(index, index + 400).forEach((entry) => {
+          batch.update(entry.ref, { dismissedAt: serverTimestamp(), readAt: entry.data().readAt ?? serverTimestamp() });
+        });
+        await batch.commit();
+      }
+    } catch {
+      setClearError("Activity could not be cleared. Please try again.");
+    } finally {
+      setClearing(false);
+    }
+  };
+
   const changePreference = async (key: keyof PushPreferences) => {
     if (!user) return;
     const next = { ...preferences, [key]: !preferences[key] };
@@ -157,22 +220,29 @@ export default function NotificationBell({ user }: { user: User | null }) {
       <ModalDialog className="activityDrawer" role="dialog" aria-modal="true" aria-labelledby="activity-title">
         <header>
           <div><p>Your Stream Find</p><h2 id="activity-title">Activity</h2></div>
-          <button type="button" onClick={() => setOpen(false)} aria-label="Close activity">×</button>
+          <div className="activityHeaderActions">
+            {visible.length > 0 && <button className="activityClearAll" type="button" onClick={() => void clearAll()} disabled={clearing} aria-label="Clear all activity" title="Clear all activity"><SweepIcon /></button>}
+            <button type="button" onClick={() => setOpen(false)} aria-label="Close activity">×</button>
+          </div>
         </header>
         <div className="activityTools">
           <span>{unread ? `${unread} unread` : "All caught up"}</span>
-          {unread > 0 && <button type="button" onClick={() => void markAllRead()}>Mark all read</button>}
+          {unread > 0 && <button type="button" onClick={() => void markAllRead()} disabled={clearing}>Mark all read</button>}
         </div>
         <div className="activityList">
-          {visible.length ? visible.map((item) => <article className={item.readAt ? "" : "unread"} key={item.id}>
+          {clearError && <p className="activityClearError" role="alert">{clearError}</p>}
+          {visible.length ? visible.map((item) => {
+            const artwork = item.imageUrl || legacyArtwork[`${user.uid}:${item.id}`];
+            return <article className={item.readAt ? "" : "unread"} key={item.id}>
             <button className="activityOpen" type="button" onClick={() => void openNotification(item)}>
-              <span className={`activityArtwork ${item.type}`} style={item.imageUrl ? { backgroundImage: `url(${JSON.stringify(item.imageUrl)})` } : undefined}>
-                {!item.imageUrl && (item.actor?.photoURL ? <i style={{ backgroundImage: `url(${JSON.stringify(item.actor.photoURL)})` }} /> : activityMark(item.type))}
+              <span className={`activityArtwork ${item.type}`} style={artwork ? { backgroundImage: `url(${JSON.stringify(artwork)})` } : undefined}>
+                {!artwork && (item.actor?.photoURL ? <i style={{ backgroundImage: `url(${JSON.stringify(item.actor.photoURL)})` }} /> : activityTitleId(item) !== null ? item.heading.slice(0, 1) : activityMark(item.type))}
               </span>
               <span className="activityCopy"><strong>{item.heading}</strong><span>{item.body}</span><small>{relativeTime(item.createdAt)}</small></span>
             </button>
             <button className="activityDismiss" type="button" onClick={() => void dismiss(item)} aria-label={`Dismiss ${item.heading}`}>×</button>
-          </article>) : <div className="activityEmpty"><span><BellIcon /></span><h3>Nothing new yet</h3><p>Recommendations, friend activity, availability changes, and release updates will appear here.</p></div>}
+          </article>;
+          }) : <div className="activityEmpty"><span><BellIcon /></span><h3>Nothing new yet</h3><p>Recommendations, friend activity, availability changes, and release updates will appear here.</p></div>}
         </div>
         <footer className="activitySettings">
           <button type="button" onClick={() => setSettingsOpen((current) => !current)} aria-expanded={settingsOpen}><span>Push preferences</span><span>{settingsOpen ? "−" : "+"}</span></button>
@@ -201,6 +271,14 @@ function activityMark(type: NotificationType) {
   return "☺";
 }
 
+function activityTitleId(item: ActivityNotification) {
+  if (item.type === "release_alert") return releaseTitleId(item);
+  if (!item.type.startsWith("availability_")) return null;
+  if (Number.isSafeInteger(item.titleId)) return item.titleId!;
+  const match = /^(-?\d+):/.exec(item.sourceId ?? "");
+  return match ? Number(match[1]) : null;
+}
+
 function relativeTime(timestamp?: Timestamp) {
   if (!timestamp?.toMillis) return "Just now";
   const minutes = Math.max(0, Math.round((Date.now() - timestamp.toMillis()) / 60_000));
@@ -214,4 +292,8 @@ function relativeTime(timestamp?: Timestamp) {
 
 function BellIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+}
+
+function SweepIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 3.5 12 12m-.5-.5 4 4-5.7 5.7a11 11 0 0 1-7-7l8.7-2.7ZM6 15l3 3" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
