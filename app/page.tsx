@@ -6,7 +6,7 @@ import ProviderLogo, { providerBrand, providerHost } from "@/components/Provider
 import { useRouter } from "next/navigation";
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { collection, deleteDoc, doc, getDoc, getDocs, serverTimestamp, setDoc, writeBatch } from "firebase/firestore";
+import { collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, serverTimestamp, setDoc, writeBatch } from "firebase/firestore";
 import NotificationBell from "@/components/NotificationBell";
 import SocialHub from "@/components/SocialHub";
 import MemberHome from "@/components/MemberHome";
@@ -638,9 +638,11 @@ export default function Home() {
     if (!accountUser) return;
     const destination = new URLSearchParams(window.location.search).get("next");
     if (!destination || !/^\/together(?:\/[a-zA-Z0-9]{16,32})?$/.test(destination)) return;
-    void getDoc(doc(firestore, "users", accountUser.uid)).then((profile) => {
+    // A newly invited member may still be creating a username after sign-in.
+    // Keep watching until that profile exists so the invitation survives onboarding.
+    return onSnapshot(doc(firestore, "users", accountUser.uid), (profile) => {
       if (profile.exists()) router.replace(destination);
-    }).catch(() => undefined);
+    }, () => undefined);
   }, [accountUser, router]);
 
   useEffect(() => {
