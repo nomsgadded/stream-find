@@ -10,6 +10,7 @@ import { collection, deleteDoc, doc, getDoc, getDocs, serverTimestamp, setDoc, w
 import NotificationBell from "@/components/NotificationBell";
 import { HeaderSearchButton } from "@/components/GlobalSearch";
 import { firebaseAuth, firestore } from "@/lib/firebase";
+import { compareOffers } from "@/lib/offer-priority";
 import { personPath } from "@/lib/person-routes";
 import { parseTitleKey, titlePath } from "@/lib/title-routes";
 import { hasInternalTitleOrigin, readTitleNavigationPreview, rememberTitleNavigation } from "@/lib/title-navigation";
@@ -423,7 +424,7 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
   if (status === "loading") return <TitleLoading titleHint={route?.titleHint} />;
   if (status === "error" || !title) return <TitleError message={error} onBack={() => router.push("/")} />;
 
-  const orderedOffers = [...title.offers].sort((a, b) => offerRank(a, savedServices) - offerRank(b, savedServices) || (a.price ?? 0) - (b.price ?? 0));
+  const orderedOffers = [...title.offers].sort((a, b) => compareOffers(a, b, savedServices));
   const bestOffer = orderedOffers[0];
   const visibleCredits = creditsExpanded ? credits : credits.slice(0, 6);
   const activeSeason = seasons.find((season) => season.seasonNumber === selectedSeason) ?? seasons[0];
@@ -465,7 +466,7 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
           <div>
             <p>{title.mediaType === "movie" ? "Movie" : "Series"} · {title.year} · {title.rating}</p>
             <h1>{title.title}</h1>
-            <span className="titleMeta">{[title.score ? `${title.score}% score` : null, title.runtime, ...title.genres.slice(0, 3)].filter(Boolean).join(" · ")}</span>
+            <span className="titleMeta">{[title.score ? `${title.score}% TMDB rating` : null, title.runtime, ...title.genres.slice(0, 3)].filter(Boolean).join(" · ")}</span>
             {title.networkNames?.length ? <span className="titleNetworks">From {title.networkNames.join(" · ")}</span> : null}
             <div className="titleHeroActions">
               {bestOffer?.url && <a className="primaryTitleAction" href={bestOffer.url} target="_blank" rel="noreferrer">Watch on {bestOffer.provider} ↗</a>}
@@ -640,11 +641,6 @@ function TitleGlobalHeader({ accountUser }: { accountUser: User | null }) {
     </nav>
     <div className="headerActions"><NotificationBell user={accountUser} /><HeaderSearchButton href="/?search=1" /><Link className="profileButton" href="/?panel=friends" aria-label={accountUser ? "Open account and friends" : "Sign in to Stream Find"}>{initials}</Link></div>
   </header>;
-}
-
-function offerRank(offer: Offer, services: string[]) {
-  if (offer.type === "included" && services.includes(offer.provider)) return services.indexOf(offer.provider) / (services.length + 1);
-  return offer.type === "included" ? 1 : offer.type === "free" ? 2 : offer.type === "rent" ? 3 : 4;
 }
 
 function offerLabel(offer: Pick<Offer, "type" | "price" | "currency">) {
