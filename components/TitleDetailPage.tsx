@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import TitleInsight from "@/components/TitleInsight";
 import WatchlistButton from "@/components/WatchlistButton";
 import EpisodeGuide from "@/components/EpisodeGuide";
 import { readEpisodeTarget } from "@/lib/episode-links";
@@ -118,7 +119,10 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
           lastY = y;
         }
         // Keep scroll-spy independent of the nav's hide/reveal transform.
-        const dockBottom = window.innerWidth <= 700 ? 170 : 192;
+        const panel = document.querySelector<HTMLElement>(".titleNavigationPanel");
+        const dockBottom = window.innerWidth <= 700 && panel
+          ? panel.offsetHeight + (Number.parseFloat(window.getComputedStyle(panel).top) || 12)
+          : 192;
         let current = "title-overview";
         for (const heading of document.querySelectorAll<HTMLElement>(".titlePageBody h2[id]")) {
           if (heading.getBoundingClientRect().top <= dockBottom + 24) current = heading.id;
@@ -518,17 +522,19 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
 
   return (
     <main className="titlePage" data-nav-hidden={navHidden ? "true" : undefined} onFocusCapture={() => setNavHidden(false)}>
-      <TitleGlobalHeader accountUser={accountUser} />
-      <div className="titleActionBar">
-        <button type="button" onClick={goBack} aria-label="Return to the previous page or Discover">← Back</button>
-        <strong><span>{title.title}</span><small>{title.mediaType === "movie" ? "Movie" : "Series"} · {title.year}</small></strong>
-        <div className="titleBarActions">
-          <WatchlistButton saved={saved} titleName={title.title} onClick={() => void toggleWatchlist()} />
+      <div className="titleNavigationPanel">
+        <TitleGlobalHeader accountUser={accountUser} />
+        <div className="titleActionBar">
+          <button type="button" onClick={goBack} aria-label="Return to the previous page or Discover">← Back</button>
+          <strong><span>{title.title}</span><small>{title.mediaType === "movie" ? "Movie" : "Series"} · {title.year}</small></strong>
+          <button className="titleSectionDock titleSectionTrigger" ref={sectionsRef} type="button" aria-label={`Current section: ${activeSection}. Open section navigation`} aria-haspopup="dialog" aria-expanded={sectionSheetOpen} aria-controls="title-section-sheet" onClick={() => { setNavHidden(false); sectionSheetRef.current?.showModal(); setSectionSheetOpen(true); }}>
+            <span className="titleSectionContext"><small>{title.title}</small><span>{activeSection}</span></span><svg className="titleSectionChevron" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false"><path d="m4.5 7.5 5.5 5 5.5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          </button>
+          <div className="titleBarActions">
+            <WatchlistButton saved={saved} titleName={title.title} onClick={() => void toggleWatchlist()} />
+          </div>
         </div>
       </div>
-      <button className="titleSectionDock titleSectionTrigger" ref={sectionsRef} type="button" aria-label={`Current section: ${activeSection}. Open section navigation`} aria-haspopup="dialog" aria-expanded={sectionSheetOpen} aria-controls="title-section-sheet" onClick={() => { setNavHidden(false); sectionSheetRef.current?.showModal(); setSectionSheetOpen(true); }}>
-        <span>{activeSection}</span><svg className="titleSectionChevron" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false"><path d="m4.5 7.5 5.5 5 5.5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
-      </button>
       <dialog className="titleSectionSheet" id="title-section-sheet" ref={sectionSheetRef} aria-labelledby="title-section-sheet-heading" onClose={() => { setSectionSheetOpen(false); setNavHidden(false); sectionsRef.current?.focus({ preventScroll: true }); }} onClick={(event) => { if (event.target === event.currentTarget) event.currentTarget.close(); }}>
         <div className="titleSectionSheetPanel">
           <header><div><p>{title.title}</p><h2 id="title-section-sheet-heading">Jump to section</h2></div><button type="button" autoFocus onClick={() => sectionSheetRef.current?.close()}>Close</button></header>
@@ -542,7 +548,11 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
             if (!target) return;
             history.replaceState(history.state, "", `#${link.id}`);
             requestAnimationFrame(() => {
-              const top = target.getBoundingClientRect().top + window.scrollY - 190;
+              const panel = document.querySelector<HTMLElement>(".titleNavigationPanel");
+              const offset = window.innerWidth <= 700 && panel
+                ? panel.offsetHeight + (Number.parseFloat(window.getComputedStyle(panel).top) || 12) + 20
+                : 190;
+              const top = target.getBoundingClientRect().top + window.scrollY - offset;
               window.scrollTo({ top: Math.max(0, top), behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
               target.setAttribute("tabindex", "-1");
               target.focus({ preventScroll: true });
@@ -598,8 +608,8 @@ export default function TitleDetailPage({ titleKey }: { titleKey: string }) {
 
         {title.willYouLikeThis || title.reviewSummary ? (
           <section className="titleInsights">
-            {title.willYouLikeThis && <article><small>Will you like it?</small><p>{title.willYouLikeThis}</p></article>}
-            {title.reviewSummary && <article><small>What reviewers say</small><p>{title.reviewSummary}</p></article>}
+            {title.willYouLikeThis && <TitleInsight kind="fit" text={title.willYouLikeThis} />}
+            {title.reviewSummary && <TitleInsight kind="reviews" text={title.reviewSummary} />}
           </section>
         ) : null}
 

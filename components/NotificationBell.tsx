@@ -295,5 +295,10 @@ function BellIcon() {
 }
 
 function SweepIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 3.5 12 12m-.5-.5 4 4-5.7 5.7a11 11 0 0 1-7-7l8.7-2.7ZM6 15l3 3" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+  return <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+    <path d="m21 3-8 8" />
+    <path d="m12 9 3 3-3 3-3-3 3-3Z" />
+    <path d="M9 12c-1.6 1-3.7 1.5-6 1.5A10.5 10.5 0 0 0 10.5 21L15 15l-3-3" />
+    <path d="m5 14.5 4.5 4.5m-2-5 4 4M16 21h5m-3-4h3" />
+  </svg>;
 }

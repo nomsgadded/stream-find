@@ -10,6 +10,7 @@ import ModalDialog from "@/components/ModalDialog";
 
 export function useEpisodeFavorites(tmdbId?: number) {
   const [user,setUser]=useState<User|null>(null);
+  const [authReady,setAuthReady]=useState(false);
   const [favorites,setFavorites]=useState<FavoriteEpisode[]>([]);
   const [watched,setWatched]=useState<FavoriteEpisode[]>([]);
   const [progressLimited,setProgressLimited]=useState(false);
@@ -17,7 +18,7 @@ export function useEpisodeFavorites(tmdbId?: number) {
   const [error,setError]=useState("");
   const [retry,setRetry]=useState(0);
   const currentUid=useRef<string|null>(null);
-  useEffect(()=>onAuthStateChanged(firebaseAuth,account=>{currentUid.current=account?.uid??null;setUser(account);setFavorites([]);setWatched([]);setProgressLimited(false);setReady(false);setError("");}),[]);
+  useEffect(()=>onAuthStateChanged(firebaseAuth,account=>{currentUid.current=account?.uid??null;setUser(account);setAuthReady(true);setFavorites([]);setWatched([]);setProgressLimited(false);setReady(false);setError("");}),[]);
   useEffect(()=>{
     const controller=new AbortController();
     if (!user) return;
@@ -34,7 +35,7 @@ export function useEpisodeFavorites(tmdbId?: number) {
     if(action==="watched"||action==="unwatched")setWatched(current=>action==="unwatched"?current.filter(item=>episodeKey(item)!==episodeKey(episode)):[episode,...current.filter(item=>episodeKey(item)!==episodeKey(episode))]);
     if(action==="favorite"||action==="remove")setFavorites(current=>action==="remove"?current.filter(item=>episodeKey(item)!==episodeKey(episode)):[episode,...current.filter(item=>episodeKey(item)!==episodeKey(episode))]);
   };
-  return {user,favorites:user?favorites:[],watched:user?watched:[],progressLimited,ready:user?ready:false,error:user?error:"",action,retry:()=>setRetry(value=>value+1)};
+  return {user,authReady,favorites:user?favorites:[],watched:user?watched:[],progressLimited,ready:user?ready:false,error:user?error:"",action,retry:()=>setRetry(value=>value+1)};
 }
 export type EpisodeFavorites = ReturnType<typeof useEpisodeFavorites>;
 export default function EpisodeActions({episode,favorites}:{episode:FavoriteEpisode;favorites:EpisodeFavorites}) {
@@ -45,7 +46,7 @@ export default function EpisodeActions({episode,favorites}:{episode:FavoriteEpis
   const toggle=async()=>{setBusy(true);try{await favorites.action(saved?'remove':'favorite',episode);setStatus(saved?'Removed from favorite episodes':'Added to favorite episodes');}catch(error){setStatus(error instanceof Error?error.message:'Could not save episode.');}finally{setBusy(false);}};
   return <><div className="episodeActions"><button type="button" className={saved?'favoriteEpisode saved':'favoriteEpisode'} aria-pressed={saved} aria-label={`${saved?'Remove':'Favorite'} ${episode.showTitle} season ${episode.seasonNumber} episode ${episode.episodeNumber}`} title={saved?'Remove favorite':'Favorite episode'} disabled={busy||Boolean(favorites.user&&!favorites.ready)} onClick={()=>void toggle()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21.3l8.8-8.9a5.5 5.5 0 0 0 0-7.8Z" fill={saved?'currentColor':'none'} stroke="currentColor" strokeWidth="1.7" /></svg></button><button type="button" className={watched?"episodeWatched active":"episodeWatched"} aria-pressed={watched} aria-label={`${watched?"Mark unwatched":"Mark watched"}: ${episode.showTitle} season ${episode.seasonNumber} episode ${episode.episodeNumber}`} disabled={busy||Boolean(favorites.user&&!favorites.ready)} onClick={()=>void markWatched()}>{watched?"✓ Watched":"Mark watched"}</button><button type="button" onClick={()=>setSharing(true)}>Share episode ↗</button></div>{status&&<p role="status" className="episodeSource">{status}{!favorites.user&&<> <Link href="/?panel=account">Sign in</Link></>}</p>}{sharing&&<EpisodeShare episode={episode} favorites={favorites} onClose={()=>setSharing(false)} />}</>;
 }
-function EpisodeShare({episode,favorites,onClose}:{episode:FavoriteEpisode;favorites:EpisodeFavorites;onClose:()=>void}) {
+export function EpisodeShare({episode,favorites,onClose}:{episode:FavoriteEpisode;favorites:EpisodeFavorites;onClose:()=>void}) {
   const [friends,setFriends]=useState<Array<{uid:string;name:string}>|null>(null);const [recipient,setRecipient]=useState("");const [note,setNote]=useState("");const [status,setStatus]=useState("");const [busy,setBusy]=useState(false);
   useEffect(()=>{let cancelled=false;if(!favorites.user)return;void getDocs(collection(firestore,'users',favorites.user.uid,'friends')).then(snapshot=>{if(!cancelled)setFriends(snapshot.docs.map(entry=>({uid:entry.id,name:String(entry.data().displayName||'Friend')})));}).catch(()=>{if(!cancelled){setFriends([]);setStatus('Friends could not load. You can still copy the episode link.');}});return()=>{cancelled=true;};},[favorites.user]);
   const copy=async()=>{try{await navigator.clipboard.writeText(new URL(episodePath(episode),window.location.origin).href);setStatus('Episode link copied');}catch{setStatus('Copy failed. Select and copy the link below.');}};

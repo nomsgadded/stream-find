@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import ts from 'typescript';
+import React from 'react';
+import {renderToStaticMarkup} from 'react-dom/server';
+const encode=code=>`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`;
+const compile=async path=>ts.transpileModule(await readFile(new URL(path,import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.ESNext,jsx:ts.JsxEmit.ReactJSX}}).outputText;
+const routes=encode(await compile('../lib/title-routes.ts'));
+const links=encode((await compile('../lib/episode-links.ts')).replace('"@/lib/title-routes"',JSON.stringify(routes)));
+const source=await compile('../components/FavoriteEpisodes.tsx');
+const react=import.meta.resolve('react');
+const elementMock=encode(`import React from ${JSON.stringify(react)}; export default function Element({children,unoptimized,...props}) { return React.createElement(props.src?'img':'a',props,children); }`);
+const episode={tmdbId:126308,showTitle:'Shōgun',seasonNumber:1,episodeNumber:1,episodeName:'Anjin'};
+const navigationMock=encode('export function rememberTitleNavigation() {}');
+async function render(state,variant='watchlist') {
+  const mock=encode(`export function useEpisodeFavorites(){return ${JSON.stringify(state)}}; export function EpisodeShare(){return null}`);
+  const code=source.replace(/from "([^"]+)"/g,(_,path)=>`from ${JSON.stringify(path==='react'?react:path==='react/jsx-runtime'?import.meta.resolve('react/jsx-runtime'):path==='@/lib/episode-links'?links:path==='@/lib/title-navigation'?navigationMock:path==='@/components/EpisodeActions'?mock:elementMock)}`);
+  const {default:Component}=await import(encode(code));
+  return renderToStaticMarkup(React.createElement(Component,{variant}));
+}
+const ready={authReady:true,user:{uid:'member'},ready:true,error:'',favorites:[]};
+assert.match(await render({...ready,authReady:false}),/Loading favorite episodes/);
+const guest=await render({...ready,user:null});assert.match(guest,/Sign in to see your favorite episodes/);assert.doesNotMatch(guest,/Loading favorite episodes/);
+assert.match(await render(ready),/Heart an episode/);
+assert.match(await render({...ready,error:'Could not load'}),/Try again/);
+const saved=await render({...ready,favorites:[episode]});
+assert.match(saved,/Season 1 · Episode 1/);assert.match(saved,/Anjin/);assert.match(saved,/season=1&amp;episode=1#episode-126308-1-1/);
+assert.match(saved,/Share Shōgun season 1 episode 1/);assert.match(saved,/Remove Shōgun season 1 episode 1/);
+assert.match(await render({...ready,favorites:[episode]},'account'),/favorite-episodes-account-heading/);
+console.log('PASS: auth/loading/error/empty states, saved episode deep links, distinct account heading and share/remove controls');

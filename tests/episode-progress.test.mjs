@@ -5,8 +5,8 @@ const encode=code=>`data:text/javascript;base64,${Buffer.from(code).toString('ba
 const compile=async path=>ts.transpileModule(await readFile(new URL(path,import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.ESNext}}).outputText;
 const routes=encode(await compile('../lib/title-routes.ts'));
 const links=encode((await compile('../lib/episode-links.ts')).replace('"@/lib/title-routes"',JSON.stringify(routes)));
-const module=encode((await compile('../lib/episode-progress.ts')).replace('"@/lib/episode-links"',JSON.stringify(links)));
-const {seasonProgress}=await import(module);
+const progressModule=encode((await compile('../lib/episode-progress.ts')).replace('"@/lib/episode-links"',JSON.stringify(links)));
+const {seasonProgress}=await import(progressModule);
 const episodes=[{episodeNumber:1,airDate:'2026-01-01'},{episodeNumber:2,airDate:'2026-01-02'},{episodeNumber:3,airDate:'2027-01-01'}];
 const watched=(tmdbId,seasonNumber,episodeNumber)=>({tmdbId,seasonNumber,episodeNumber,showTitle:'Example',episodeName:'Episode'});
 let progress=seasonProgress(123,1,episodes,[watched(123,1,2),watched(999,1,1),watched(123,2,1)],'2026-10-03');

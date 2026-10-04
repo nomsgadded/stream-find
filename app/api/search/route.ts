@@ -112,6 +112,7 @@ export async function GET(request: Request) {
 
   try {
     let nextPage: number | null = null;
+    let remainingCount = 0;
     let titles: SearchResult[];
     if (requestedId) {
       const selected = await fetchDetails(requestedId, apiKey, region.code, region.currency);
@@ -137,7 +138,8 @@ export async function GET(request: Request) {
       }));
       titles = mergeTitleRecords(details.flatMap((result) => result.status === "fulfilled" && result.value ? [result.value] : []));
       if (pageGroups.length && !titles.length) throw new Error("502");
-      nextPage = page * PAGE_SIZE < groups.length ? page + 1 : null;
+      remainingCount = Math.max(0, groups.length - page * PAGE_SIZE);
+      nextPage = remainingCount > 0 ? page + 1 : null;
     }
 
     for (const title of titles) {
@@ -155,6 +157,7 @@ export async function GET(request: Request) {
         region: region.code,
         titles,
         nextPage,
+        remainingCount,
       },
       {
         headers: {

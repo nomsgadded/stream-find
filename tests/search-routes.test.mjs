@@ -88,8 +88,10 @@ try {
   const second = await (await request(search, "q=Lottery&page=2")).json();
   assert.equal(first.titles.length, 12);
   assert.equal(first.nextPage, 2);
+  assert.equal(first.remainingCount, 2, "Remaining count uses distinct matching titles after grouping aliases");
   assert.equal(second.titles.length, 2);
   assert.equal(second.nextPage, null);
+  assert.equal(second.remainingCount, 0);
   assert.equal(new Set([...first.titles, ...second.titles].map((item) => item.id)).size, 14);
   process.env.TMDB_ACCESS_TOKEN = "test-token";
   matches = []; suggestions = [];
